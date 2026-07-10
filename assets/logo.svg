@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 160 160" role="img" aria-label="شعار نظام الزكاة والتبرعات">
+  <defs>
+    <linearGradient id="g" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#0ea5e9"/>
+      <stop offset="1" stop-color="#1d4ed8"/>
+    </linearGradient>
+    <linearGradient id="h" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fde68a"/>
+      <stop offset="1" stop-color="#f59e0b"/>
+    </linearGradient>
+  </defs>
+  <rect x="8" y="8" width="144" height="144" rx="40" fill="url(#g)"/>
+  <path d="M80 117c-9-12-30-23-30-43 0-11 8-19 18-19 6 0 10 3 12 8 3-5 7-8 13-8 10 0 18 8 18 19 0 20-22 31-31 43z" fill="white" opacity=".96"/>
+  <path d="M43 90c7 1 13 5 18 11M117 90c-7 1-13 5-18 11" stroke="url(#h)" stroke-width="10" stroke-linecap="round" fill="none"/>
+  <circle cx="80" cy="46" r="10" fill="url(#h)"/>
+</svg>
