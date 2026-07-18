@@ -43,7 +43,7 @@
   "rewrites": [
     {
       "source": "/api/supabase/:path*",
-      "destination": "https://bvkcfdagsfmqrhyqspan.supabase.co/:path*"
+      "destination": "https://miivxpuymxzcchfdgobk.supabase.co/:path*"
     },
     {
       "source": "/((?!api/|assets/|css/|js/|service-worker.js|manifest.webmanifest).*)",
