@@ -2,17 +2,52 @@
   "$schema": "https://openapi.vercel.sh/vercel.json",
   "cleanUrls": true,
   "trailingSlash": false,
+
   "headers": [
+    {
+      "source": "/api/supabase/:path*",
+      "headers": [
+        {
+          "key": "Cache-Control",
+          "value": "no-store, no-cache, must-revalidate"
+        },
+        {
+          "key": "Pragma",
+          "value": "no-cache"
+        },
+        {
+          "key": "Expires",
+          "value": "0"
+        }
+      ]
+    },
     {
       "source": "/(.*)",
       "headers": [
-        {"key": "X-Content-Type-Options", "value": "nosniff"},
-        {"key": "Referrer-Policy", "value": "strict-origin-when-cross-origin"},
-        {"key": "Permissions-Policy", "value": "camera=(self), microphone=(), geolocation=()"}
+        {
+          "key": "X-Content-Type-Options",
+          "value": "nosniff"
+        },
+        {
+          "key": "Referrer-Policy",
+          "value": "strict-origin-when-cross-origin"
+        },
+        {
+          "key": "Permissions-Policy",
+          "value": "camera=(self), microphone=(), geolocation=()"
+        }
       ]
     }
   ],
+
   "rewrites": [
-    {"source": "/((?!assets/|css/|js/|service-worker.js|manifest.webmanifest).*)", "destination": "/index.html"}
+    {
+      "source": "/api/supabase/:path*",
+      "destination": "https://bvkcfdagsfmqrhyqspan.supabase.co/:path*"
+    },
+    {
+      "source": "/((?!api/|assets/|css/|js/|service-worker.js|manifest.webmanifest).*)",
+      "destination": "/index.html"
+    }
   ]
 }
