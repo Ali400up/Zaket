@@ -1,3 +1,4 @@
+import { isOnline } from "./connectivity.js";
 const QUEUE_KEY = "zakat_offline_queue_v1";
 
 function readQueue() {
@@ -46,7 +47,7 @@ export function clearCompletedQueue() {
 
 export async function syncOfflineQueue(executor) {
   const queue = readQueue();
-  if (!navigator.onLine || !queue.length) return { synced: 0, failed: 0 };
+  if (!isOnline() || !queue.length) return { synced: 0, failed: 0 };
 
   let synced = 0;
   let failed = 0;

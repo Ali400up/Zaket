@@ -126,7 +126,96 @@ export const demoData = {
     { id: "a-4", user_id: "u-admin", action: "تعديل صلاحيات مستخدم", table_name: "profiles", record_id: "u-accountant", old_data: { role: "data_entry" }, new_data: { role: "accountant" }, session_info: { device: "Chrome / Windows" }, result: "success", created_at: iso(-100) },
     { id: "a-5", user_id: "u-distributor", action: "محاولة صرف فوق الرصيد", table_name: "cash_payments", record_id: null, old_data: null, new_data: { amount: 5000000 }, session_info: { device: "Android" }, result: "failed", created_at: iso(-3) }
   ],
+  branches: [
+    {id:"br-1",name:"الإدارة العامة - صنعاء",code:"HQ-SAN",governorate:"أمانة العاصمة",district:"التحرير",address:"شارع الزبيري - جوار الجامع الكبير",manager_name:"محمد العريقي",phone:"01444000",is_active:true,created_at:iso(-300)},
+    {id:"br-2",name:"فرع حدة",code:"SAN-HAD",governorate:"أمانة العاصمة",district:"السبعين",address:"حدة - جوار مدرسة النهضة",manager_name:"سارة القحطاني",phone:"777001100",is_active:true,created_at:iso(-180)}
+  ],
+  authorized_devices: [
+    {id:"dev-1",device_name:"حاسوب الإدارة",fingerprint:"FP-ADMIN-001",user_id:"u-admin",platform:"Chrome / Windows 11",last_seen_at:iso(0),status:"approved",notes:"الجهاز الرئيسي"},
+    {id:"dev-2",device_name:"هاتف الموزع",fingerprint:"FP-DIST-004",user_id:"u-distributor",platform:"Android / Chrome",last_seen_at:iso(-1),status:"approved",notes:"جهاز ميداني"},
+    {id:"dev-3",device_name:"جهاز غير معروف",fingerprint:"FP-UNKNOWN-9",user_id:"u-accountant",platform:"Firefox / Linux",last_seen_at:iso(-2),status:"pending",notes:"بانتظار الترخيص"}
+  ],
+  login_attempts: [
+    {id:"la-1",attempted_at:iso(-1),phone:"777000333",device_name:"حاسوب المحاسب",ip_address:"192.168.1.22",result:"success",lockout_until:null},
+    {id:"la-2",attempted_at:iso(-0.2),phone:"777999999",device_name:"جهاز غير معروف",ip_address:"10.0.0.8",result:"failed",lockout_until:null},
+    {id:"la-3",attempted_at:iso(-0.1),phone:"777999999",device_name:"جهاز غير معروف",ip_address:"10.0.0.8",result:"blocked",lockout_until:iso(0.02)}
+  ],
+  user_sessions: [
+    {id:"us-1",user_id:"u-admin",user_name:"محمد العريقي",role_name:"مدير النظام",device_name:"حاسوب الإدارة",branch_name:"الإدارة العامة - صنعاء",login_at:iso(-0.4),last_activity_at:iso(0),status:"active"},
+    {id:"us-2",user_id:"u-distributor",user_name:"عبدالله الصبري",role_name:"موزع",device_name:"هاتف الموزع",branch_name:"فرع حدة",login_at:iso(-1),last_activity_at:iso(-0.1),status:"inactive"}
+  ],
+  user_archives: [
+    {id:"ua-1",created_at:iso(-2),user_name:"سارة القحطاني",archive_type:"تقرير",title:"تقرير حملة رمضان",description:"نسخة محفوظة للمراجعة",reference_no:"REP-2026-004"},
+    {id:"ua-2",created_at:iso(-1),user_name:"خالد الحكيمي",archive_type:"تصدير",title:"كشف الصناديق",description:"تصدير CSV",reference_no:"EXP-2026-011"}
+  ],
+  cashbox_ledger: [
+    {id:"led-open-1",cashbox_id:"cb-1",transaction_type:"adjustment",reference_table:"opening_import",reference_id:null,debit:0,credit:3320000,currency:"YER",description:"رصيد مرحل قبل تشغيل النسخة",transaction_at:iso(-30),created_at:iso(-30)},
+    {id:"led-cf-1",cashbox_id:"cb-1",transaction_type:"campaign_funding",reference_table:"campaign_funding",reference_id:"cf-1",debit:1000000,credit:0,currency:"YER",description:"تمويل حملة - CF-2026-0001",transaction_at:iso(-5),created_at:iso(-5)},
+    {id:"led-open-2",cashbox_id:"cb-2",transaction_type:"adjustment",reference_table:"opening_import",reference_id:null,debit:0,credit:840000,currency:"YER",description:"رصيد مرحل قبل تشغيل النسخة",transaction_at:iso(-30),created_at:iso(-30)},
+    {id:"led-open-3",cashbox_id:"cb-3",transaction_type:"adjustment",reference_table:"opening_import",reference_id:null,debit:250,credit:0,currency:"USD",description:"تسوية رصيد افتتاحي",transaction_at:iso(-30),created_at:iso(-30)}
+  ],
+  campaign_funding: [
+    {id:"cf-1",funding_no:"CF-2026-0001",funding_date:dateOnly(-5),campaign_id:"c-1",cashbox_id:"cb-1",amount:1000000,currency:"YER",status:"posted",notes:"تمويل أولي للحملة",posted_at:iso(-5),created_at:iso(-5)}
+  ],
+  campaign_distributors: [
+    {id:"cd-1",campaign_id:"c-1",delegate_id:"d-1",cashbox_id:"cb-1",area_name:"حدة",allocated_amount:500000,spent_amount:120000,returned_amount:0,remaining_amount:380000,status:"active",assigned_at:iso(-4),notes:"موزع منطقة حدة"},
+    {id:"cd-2",campaign_id:"c-1",delegate_id:"d-2",cashbox_id:"cb-1",area_name:"التحرير",allocated_amount:300000,spent_amount:50000,returned_amount:0,remaining_amount:250000,status:"active",assigned_at:iso(-4),notes:"موزع منطقة التحرير"}
+  ],
+  cashboxes: [
+    {id:"cb-1",name:"الصندوق الرئيسي",code:"CB-HQ-01",branch_id:"br-1",currency:"YER",opening_balance:3000000,current_balance:5320000,responsible_name:"خالد الحكيمي",is_active:true,notes:"الصندوق المركزي",created_at:iso(-200)},
+    {id:"cb-2",name:"صندوق فرع حدة",code:"CB-HAD-01",branch_id:"br-2",currency:"YER",opening_balance:1000000,current_balance:1840000,responsible_name:"سارة القحطاني",is_active:true,notes:"صرف ميداني",created_at:iso(-150)},
+    {id:"cb-3",name:"صندوق الدولار",code:"CB-USD-01",branch_id:"br-1",currency:"USD",opening_balance:2000,current_balance:1750,responsible_name:"خالد الحكيمي",is_active:true,notes:"تبرعات بالعملة الأجنبية",created_at:iso(-90)}
+  ],
+  cashbox_users: [
+    {id:"cbu-1",cashbox_id:"cb-1",user_id:"u-accountant",delegate_id:null,can_receive:true,can_pay:true,daily_limit:3000000,is_active:true},
+    {id:"cbu-2",cashbox_id:"cb-2",user_id:"u-supervisor",delegate_id:"d-1",can_receive:false,can_pay:true,daily_limit:1000000,is_active:true}
+  ],
+  cash_transfers: [
+    {id:"ct-1",transfer_no:"CT-2026-0001",transfer_date:dateOnly(-8),from_cashbox_id:"cb-1",to_cashbox_id:"cb-2",amount:500000,currency:"YER",status:"posted",notes:"تغذية صندوق الفرع",created_at:iso(-8)}
+  ],
+  delegate_advances: [
+    {id:"da-1",advance_no:"ADV-2026-001",advance_date:dateOnly(-12),delegate_id:"d-1",cashbox_id:"cb-2",amount:800000,spent_amount:420000,remaining_amount:380000,status:"open",notes:"توزيع منطقة حدة",created_at:iso(-12)},
+    {id:"da-2",advance_no:"ADV-2026-002",advance_date:dateOnly(-6),delegate_id:"d-2",cashbox_id:"cb-1",amount:500000,spent_amount:300000,remaining_amount:200000,status:"open",notes:"توزيع التحرير",created_at:iso(-6)}
+  ],
+  distribution_assignments: [
+    {id:"dist-1",beneficiary_id:"b-1",beneficiary_name:"محمد صالح علي",phone:"771100200",area:"حدة - جوار مدرسة النهضة",delegate_id:"d-1",delegate_name:"عبدالله الصبري",amount:120000,delivery_status:"received",delivered_at:iso(-1)},
+    {id:"dist-2",beneficiary_id:"b-3",beneficiary_name:"عبدالرحمن يحيى",phone:"771100400",area:"حدة - شارع الخمسين",delegate_id:"d-1",delegate_name:"عبدالله الصبري",amount:100000,delivery_status:"pending",delivered_at:null}
+  ],
+  wallet_providers: [
+    {id:"wp-1",name:"محفظة كاش",provider_type:"wallet",account_format:"9 أرقام هاتف",export_format:"xlsx",is_active:true,notes:"الأعمدة: الاسم، الهاتف، المبلغ، المرجع"},
+    {id:"wp-2",name:"شركة حوالات الأمان",provider_type:"remittance",account_format:"هاتف أو رقم هوية",export_format:"csv",is_active:true,notes:"دعم نتائج نجاح وفشل"}
+  ],
+  bulk_disbursements: [
+    {id:"bd-1",batch_no:"BATCH-2026-001",batch_date:dateOnly(-3),provider_id:"wp-1",campaign_id:"c-1",cashbox_id:"cb-1",beneficiaries_count:25,total_amount:2500000,success_count:23,failed_count:2,status:"processed",notes:"دفعة رمضان الأولى",created_at:iso(-3)}
+  ],
+  disbursement_results: [
+    {id:"dr-1",batch_id:"bd-1",batch_no:"BATCH-2026-001",beneficiary_name:"محمد صالح علي",wallet_no:"771100200",amount:100000,provider_reference:"TX-88102",result:"success",processed_at:iso(-2.9)},
+    {id:"dr-2",batch_id:"bd-1",batch_no:"BATCH-2026-001",beneficiary_name:"عبدالرحمن يحيى",wallet_no:"771100400",amount:90000,provider_reference:null,result:"failed",processed_at:iso(-2.9)}
+  ],
+  units: [
+    {id:"un-1",name:"قطعة",symbol:"قطعة",unit_type:"count",is_default:true,is_active:true},{id:"un-2",name:"كيس",symbol:"كيس",unit_type:"count",is_default:true,is_active:true},{id:"un-3",name:"كرتون",symbol:"كرتون",unit_type:"count",is_default:true,is_active:true},{id:"un-4",name:"كيلوجرام",symbol:"كجم",unit_type:"weight",is_default:true,is_active:true},{id:"un-5",name:"لتر",symbol:"لتر",unit_type:"volume",is_default:true,is_active:true}
+  ],
+  warehouses: [
+    {id:"wh-1",name:"المخزن الرئيسي",code:"WH-HQ-01",branch_id:"br-1",address:"صنعاء - شارع المطار - جوار مسجد الرحمة",manager_name:"علي الآنسي",phone:"777000555",is_active:true},
+    {id:"wh-2",name:"مخزن فرع حدة",code:"WH-HAD-01",branch_id:"br-2",address:"حدة - جوار مدرسة النهضة",manager_name:"فاطمة الحضرمي",phone:"777222333",is_active:true}
+  ],
+  stock_balances: [
+    {id:"sb-1",warehouse_id:"wh-1",warehouse_name:"المخزن الرئيسي",item_id:"i-1",item_name:"أرز بسمتي",unit_name:"كيس",available_qty:125,reserved_qty:15,damaged_qty:5,min_stock:30,status:"available"},
+    {id:"sb-2",warehouse_id:"wh-1",warehouse_name:"المخزن الرئيسي",item_id:"i-3",item_name:"زيت طبخ",unit_name:"كرتون",available_qty:17,reserved_qty:5,damaged_qty:0,min_stock:20,status:"low_stock"}
+  ],
+  messages: [
+    {id:"msg-1",sent_at:iso(-1),recipient_name:"محمد صالح علي",phone:"771100200",channel:"sms",subject:"تأكيد الاستلام",status:"sent",message:"تم تسجيل استلام مساعدتك. للشكاوى: 8000000"},
+    {id:"msg-2",sent_at:iso(-0.5),recipient_name:"عبدالله الصبري",phone:"777000444",channel:"whatsapp",subject:"كشف توزيع جديد",status:"queued",message:"تم إسناد كشف جديد إليك."}
+  ],
+  message_templates: [
+    {id:"mt-1",name:"تأكيد استلام مساعدة",event_key:"aid_received",channel:"sms",body:"عزيزي {name}، تم تسجيل استلام مبلغ {amount}. للشكاوى {complaints_phone}",is_active:true,updated_at:iso(-3)},
+    {id:"mt-2",name:"تنبيه محاولة دخول",event_key:"login_lockout",channel:"whatsapp",body:"تنبيه: تم إيقاف المستخدم {user} بعد {attempts} محاولات فاشلة.",is_active:true,updated_at:iso(-4)}
+  ],
+  import_jobs: [
+    {id:"imp-1",created_at:iso(-10),target_table:"beneficiaries",target_name:"دليل المستفيدين",file_name:"beneficiaries_2026.xlsx",total_rows:500,success_rows:472,error_rows:28,status:"review"},
+    {id:"imp-2",created_at:iso(-4),target_table:"items",target_name:"دليل الأصناف",file_name:"items.csv",total_rows:80,success_rows:80,error_rows:0,status:"synced"}
+  ],
   system_settings: [
-    { id: 1, organization_name: "مؤسسة الخير للزكاة والتنمية", system_name: "نظام إدارة الزكاة والتبرعات", logo_url: "assets/logo.svg", voucher_prefixes: { cash_receipt: "CR", cash_payment: "CP", in_kind_receipt: "IKR", in_kind_payment: "IKP" }, duplicate_policy: { national_id: "block", phone: "warn", name: "warn" }, require_payment_approval: true, allow_offline_drafts: true, allow_final_offline: false, stock_alert_days: 30, currency: "YER", print_footer: "جزاكم الله خيراً", retention_years: 10, updated_at: iso(-3) }
+    { id: 1, organization_name: "مؤسسة الخير للزكاة والتنمية", system_name: "نظام إدارة الزكاة والتبرعات", logo_url: "assets/logo.svg", voucher_prefixes: { cash_receipt: "CR", cash_payment: "CP", in_kind_receipt: "IKR", in_kind_payment: "IKP" }, duplicate_policy: { national_id: "block", phone: "warn", name: "warn" }, require_payment_approval: true, allow_offline_drafts: true, allow_final_offline: false, sync_mode: "automatic", max_login_attempts: 5, lockout_minutes: 15, require_device_authorization: true, complaints_phone: "8000000", stock_alert_days: 30, currency: "YER", print_footer: "جزاكم الله خيراً", retention_years: 10, updated_at: iso(-3) }
   ]
 };

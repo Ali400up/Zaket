@@ -1,6 +1,7 @@
 import { dataService } from "./data-service.js";
 import { menuSections, screenConfigs, reportDefinitions, roleLabels, statusLabels } from "./screen-config.js";
 import { getOfflineQueue, removeQueueItem, clearCompletedQueue } from "./offline.js";
+import { isOnline, checkConnectivity, subscribeConnection } from "./connectivity.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -10,16 +11,34 @@ const config = window.ZAKAT_CONFIG || {};
 
 const routeMap = {
   dashboard: null,
+  "global-search": null,
+  branches: "branches",
+  devices: "authorized_devices",
+  "login-attempts": "login_attempts",
+  "user-tracking": "user_sessions",
+  "user-archives": "user_archives",
+  cashboxes: "cashboxes",
+  "cashbox-users": "cashbox_users",
+  "cash-transfers": "cash_transfers",
+  "delegate-advances": "delegate_advances",
+  "quick-delivery": "distribution_assignments",
+  units: "units",
+  warehouses: "warehouses",
+  "stock-balances": "stock_balances",
+  imports: "import_jobs",
   users: "profiles",
   delegates: "delegates",
   donors: "donors",
   classifications: null,
   beneficiaries: "beneficiaries",
   campaigns: "campaigns",
+  "campaign-funding": "campaign_funding",
+  "campaign-distributors": "campaign_distributors",
   "cash-receipts": "cash_receipts",
   "cash-payments": "cash_payments",
   inventory: "items",
   "in-kind-receipts": "in_kind_receipts",
+  "campaign-in-kind-funding": "campaign_in_kind_funding",
   baskets: "baskets",
   "in-kind-payments": "in_kind_payments",
   closings: "account_closings",
@@ -31,16 +50,33 @@ const routeMap = {
 
 const configKeyMap = {
   profiles: "users",
+  branches: "branches",
+  authorized_devices: "devices",
+  login_attempts: "login_attempts",
+  user_sessions: "user_tracking",
+  user_archives: "user_archives",
+  cashboxes: "cashboxes",
+  cashbox_users: "cashbox_users",
+  cash_transfers: "cash_transfers",
+  delegate_advances: "delegate_advances",
+  distribution_assignments: "quick_delivery",
+  units: "units",
+  warehouses: "warehouses",
+  stock_balances: "stock_balances",
+  import_jobs: "imports",
   delegates: "delegates",
   donors: "donors",
   beneficiary_categories: "beneficiary_categories",
   health_conditions: "health_conditions",
   beneficiaries: "beneficiaries",
   campaigns: "campaigns",
+  campaign_funding: "campaign_funding",
+  campaign_distributors: "campaign_distributors",
   cash_receipts: "cash_receipts",
   cash_payments: "cash_payments",
   items: "items",
   in_kind_receipts: "in_kind_receipts",
+  campaign_in_kind_funding: "campaign_in_kind_funding",
   baskets: "baskets",
   in_kind_payments: "in_kind_payments",
   account_closings: "closings",
@@ -49,12 +85,12 @@ const configKeyMap = {
 
 const roleAccess = {
   admin: "*",
-  supervisor: ["dashboard", "delegates", "donors", "classifications", "beneficiaries", "campaigns", "cash-receipts", "cash-payments", "inventory", "in-kind-receipts", "baskets", "in-kind-payments", "closings", "reports", "audit", "sync"],
-  accountant: ["dashboard", "delegates", "donors", "beneficiaries", "campaigns", "cash-receipts", "cash-payments", "closings", "reports"],
-  distributor: ["dashboard", "beneficiaries", "cash-payments", "in-kind-payments", "sync"],
-  data_entry: ["dashboard", "donors", "beneficiaries", "sync"],
-  warehouse: ["dashboard", "inventory", "in-kind-receipts", "baskets", "in-kind-payments", "sync"],
-  auditor: ["dashboard", "reports", "audit"]
+  supervisor: ["branches", "devices", "login-attempts", "user-tracking", "user-archives", "cashboxes", "cashbox-users", "cash-transfers", "delegate-advances", "quick-delivery", "wallet-providers", "bulk-disbursements", "disbursement-results", "units", "warehouses", "stock-balances", "messages", "message-templates", "imports", "dashboard", "delegates", "donors", "classifications", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "closings", "reports", "audit", "sync"],
+  accountant: ["cashboxes", "cashbox-users", "cash-transfers", "delegate-advances", "wallet-providers", "bulk-disbursements", "disbursement-results", "dashboard", "delegates", "donors", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "closings", "reports"],
+  distributor: ["quick-delivery", "delegate-advances", "messages", "dashboard", "beneficiaries", "cash-payments", "in-kind-payments", "sync"],
+  data_entry: ["imports", "messages", "dashboard", "donors", "beneficiaries", "sync"],
+  warehouse: ["units", "warehouses", "stock-balances", "dashboard", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "sync"],
+  auditor: ["cashboxes", "stock-balances", "login-attempts", "user-tracking", "dashboard", "reports", "audit"]
 };
 
 const state = {
@@ -126,13 +162,18 @@ function showApp() {
   navigate(location.hash.replace("#", "") || "dashboard", false);
 }
 
+
+function renderMenuIcon(icon) {
+  return `<i class="${escapeHtml(icon || "fa-solid fa-circle")}"></i>`;
+}
+
 function buildNavigation() {
   els.mainNav.innerHTML = menuSections.map(section => {
     const items = section.items.filter(item => canAccess(item.id));
     if (!items.length) return "";
     return `<span class="nav-section-label">${escapeHtml(section.label)}</span>${items.map(item => `
       <button class="nav-link ${state.currentScreen === item.id ? "active" : ""}" data-nav="${item.id}">
-        <i class="${item.icon}"></i><span>${escapeHtml(item.label)}</span>
+        ${renderMenuIcon(item.icon)}<span>${escapeHtml(item.label)}</span>
       </button>`).join("")}`;
   }).join("");
 }
@@ -157,6 +198,7 @@ async function navigate(screenId, updateHash = true) {
 
   try {
     if (screenId === "dashboard") await renderDashboard();
+    else if (screenId === "global-search") await renderReports();
     else if (screenId === "classifications") await renderClassifications();
     else if (screenId === "reports") await renderReports();
     else if (screenId === "sync") await renderSync();
@@ -212,7 +254,7 @@ async function renderDashboard() {
   els.pageContent.innerHTML = `
     <section class="welcome-banner">
       <div class="welcome-copy"><span>لوحة المتابعة اليومية</span><h2>مرحباً ${escapeHtml(firstName)}، العمل يسير بصورة جيدة.</h2><p>آخر تحديث: ${formatDate(new Date().toISOString(), true)} • ${dataService.demoMode ? "بيانات تجريبية محلية" : "متصل بقاعدة Supabase"}</p></div>
-      <div class="welcome-actions"><button class="white-action primary" data-quick-add="cash_receipts"><i class="fa-solid fa-plus"></i> سند قبض</button><button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button></div>
+      <div class="welcome-actions"><button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button><button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button></div>
     </section>
     <section class="metrics-grid">
       ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", formatNumber(activeBeneficiaries), `${beneficiaries.total} ملف مسجل`, "beneficiaries")}
@@ -227,13 +269,13 @@ async function renderDashboard() {
         ${lowStock.length ? `<div class="alert-item danger"><i class="fa-solid fa-box-open"></i><div class="alert-copy"><strong>مخزون منخفض</strong><span>${lowStock.map(x => x.name).slice(0, 3).join("، ")}</span></div><button data-nav="inventory">فتح</button></div>` : ""}
         ${pendingCount ? `<div class="alert-item warning"><i class="fa-solid fa-hourglass-half"></i><div class="alert-copy"><strong>عمليات تحت المراجعة</strong><span>${pendingCount} سند صرف ينتظر الاعتماد</span></div><button data-nav="cash-payments">فتح</button></div>` : ""}
         ${duplicateCandidates.length ? `<div class="alert-item info"><i class="fa-solid fa-clone"></i><div class="alert-copy"><strong>تشابه في المستفيدين</strong><span>${duplicateCandidates.length} ملف يحتاج فحص التكرار</span></div><button data-nav="beneficiaries">فتح</button></div>` : ""}
-        <div class="alert-item info"><i class="fa-solid fa-cloud-arrow-up"></i><div class="alert-copy"><strong>حالة المزامنة</strong><span>${navigator.onLine ? "كل الخدمات متصلة" : "الجهاز غير متصل حالياً"}</span></div><button data-nav="sync">عرض</button></div>
+        <div class="alert-item info"><i class="fa-solid fa-cloud-arrow-up"></i><div class="alert-copy"><strong>حالة المزامنة</strong><span>${isOnline() ? "كل الخدمات متصلة" : "الجهاز غير متصل حالياً"}</span></div><button data-nav="sync">عرض</button></div>
       </div></div></article>
     </section>
     <section class="dashboard-grid equal">
       <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-clock-rotate-left"></i></span><div><h3>آخر العمليات</h3><p>أحدث سندات القبض والصرف</p></div></div><button class="ghost-button" data-nav="audit">عرض السجل</button></header><div class="table-scroll"><table class="data-table" style="min-width:620px"><thead><tr><th>العملية</th><th>الطرف</th><th>الحملة</th><th>القيمة</th><th>الحالة</th></tr></thead><tbody>${recent.map(x => `<tr><td><div class="cell-title"><span class="cell-avatar"><i class="fa-solid ${x.icon}"></i></span><div><strong>${escapeHtml(x.kind)}</strong><small>${formatDate(x.receipt_date || x.payment_date)}</small></div></div></td><td>${escapeHtml(x.person || "-")}</td><td>${escapeHtml(x.campaign_name || "-")}</td><td><strong>${x.amountText}</strong></td><td>${statusBadge(x.status)}</td></tr>`).join("")}</tbody></table></div></article>
       <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bolt"></i></span><div><h3>إجراءات سريعة</h3><p>ابدأ أكثر العمليات استخداماً</p></div></div></header><div class="panel-body"><div class="quick-actions-grid">
-        <button class="quick-action-card" data-quick-add="cash_receipts"><i class="fa-solid fa-money-bill-transfer"></i><span>سند قبض نقدي</span></button>
+        <button class="quick-action-card" data-quick-delivery><i class="fa-solid fa-bolt"></i><span>تسليم سريع لمستفيد</span></button>
         <button class="quick-action-card" data-quick-add="cash_payments"><i class="fa-solid fa-hand-holding-dollar"></i><span>سند صرف نقدي</span></button>
         <button class="quick-action-card" data-quick-add="in_kind_receipts"><i class="fa-solid fa-truck-ramp-box"></i><span>قبض عيني</span></button>
         <button class="quick-action-card" data-quick-add="in_kind_payments"><i class="fa-solid fa-box-open"></i><span>صرف عيني</span></button>
@@ -344,7 +386,7 @@ const actionMeta = {
   "duplicate-check": ["fa-solid fa-clone", "فحص التكرار"], approve: ["fa-solid fa-circle-check", "اعتماد"], report: ["fa-solid fa-chart-column", "تقرير"],
   "open-close": ["fa-solid fa-door-open", "فتح/إغلاق"], post: ["fa-solid fa-stamp", "ترحيل"], print: ["fa-solid fa-print", "طباعة"],
   cancel: ["fa-solid fa-ban", "إلغاء"], "confirm-receipt": ["fa-solid fa-signature", "تأكيد الاستلام"], movements: ["fa-solid fa-arrow-right-arrow-left", "حركة الصنف"],
-  copy: ["fa-regular fa-copy", "نسخ"], "stock-check": ["fa-solid fa-warehouse", "فحص المخزون"], reopen: ["fa-solid fa-lock-open", "إعادة فتح"]
+  copy: ["fa-regular fa-copy", "نسخ"], settle: ["fa-solid fa-scale-balanced", "تسوية"], export: ["fa-solid fa-file-export", "تصدير"], "stock-check": ["fa-solid fa-warehouse", "فحص المخزون"], reopen: ["fa-solid fa-lock-open", "إعادة فتح"]
 };
 
 function availableActions(cfg, row) {
@@ -441,6 +483,9 @@ function lineItemRow(mode, items, values = {}) {
   if (mode === "receipt") {
     return `<div class="line-item-row receipt"><div class="form-field"><label>الصنف</label><select class="form-control line-item-product"><option value="">اختر الصنف</option>${options}</select></div><div class="form-field"><label>الكمية الكلية</label><input class="form-control line-item-qty" type="number" min="1" value="${values.quantity || ""}"></div><div class="form-field"><label>الصالحة</label><input class="form-control line-item-valid" type="number" min="0" value="${values.valid_qty ?? ""}"></div><div class="form-field"><label>التالفة</label><input class="form-control line-item-damaged" type="number" min="0" value="${values.damaged_qty ?? 0}"></div><div class="form-field"><label>التشغيلة / الصلاحية</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px"><input class="form-control line-item-lot" placeholder="رقم التشغيلة" value="${escapeHtml(values.lot_no || "")}"><input class="form-control line-item-expiry" type="date" value="${escapeHtml(values.expiry_date || "")}"></div></div><button class="line-item-remove" type="button" data-remove-line-item><i class="fa-solid fa-trash"></i></button></div>`;
   }
+  if (mode === "funding") {
+    return `<div class="line-item-row"><div class="form-field"><label>الصنف من المخزون</label><select class="form-control line-item-product"><option value="">اختر الصنف</option>${options}</select></div><div class="form-field"><label>الكمية المخصصة</label><input class="form-control line-item-qty" type="number" min="0.001" step="0.001" value="${values.quantity || 1}"></div><div></div><div></div><button class="line-item-remove" type="button" data-remove-line-item><i class="fa-solid fa-trash"></i></button></div>`;
+  }
   if (mode === "basket") {
     return `<div class="line-item-row"><div class="form-field"><label>الصنف</label><select class="form-control line-item-product"><option value="">اختر الصنف</option>${options}</select></div><div class="form-field"><label>الكمية</label><input class="form-control line-item-qty" type="number" min="1" value="${values.quantity || 1}"></div><div class="form-field"><label>إلزامي؟</label><select class="form-control line-item-required"><option value="true" ${values.required !== false ? "selected" : ""}>نعم</option><option value="false" ${values.required === false ? "selected" : ""}>لا</option></select></div><div></div><button class="line-item-remove" type="button" data-remove-line-item><i class="fa-solid fa-trash"></i></button></div>`;
   }
@@ -534,10 +579,18 @@ async function handleRowAction(action, id) {
       return showRelatedReport(cfg.table, record);
     } else if (action === "reset-password") {
       return openResetPassword(record);
+    } else if (action === "settle") {
+      const ok = await confirmDialog("هل تريد إقفال وتسوية عهدة هذا الموزع؟", "تسوية العهدة", "تسوية");
+      if (!ok) return;
+      await dataService.update(cfg.table, id, { status: "settled" });
+    } else if (action === "export") {
+      return exportRows([record], `${cfg.table}-${id}.csv`);
     } else if (action === "reopen") {
       const ok = await confirmDialog("إعادة فتح الإقفال عملية حساسة وستسجل في سجل التدقيق.", "إعادة فتح الحساب", "إعادة فتح", true);
       if (!ok) return;
       await dataService.action(cfg.table, id, "reopen");
+    } else {
+      return toast(`الإجراء «${action}» غير مربوط بعد بهذه الشاشة.`, "warning");
     }
     toast("تم تنفيذ العملية بنجاح.");
     await refreshCurrentScreen();
@@ -679,7 +732,7 @@ async function renderSync() {
   const pending = queue.filter(x => ["queued", "syncing"].includes(x.status)).length;
   const last = queue.find(x => x.syncedAt)?.syncedAt;
   els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">مراقبة المسودات المحلية ومنع تكرار العملية عند إعادة الإرسال.</div><div class="toolbar-actions"><button class="ghost-button" data-clear-synced><i class="fa-solid fa-broom"></i> حذف المكتمل</button><button class="primary-button" data-sync-now><i class="fa-solid fa-arrows-rotate"></i> مزامنة الآن</button></div></section>
-    <section class="sync-summary"><div class="sync-card"><i class="fa-solid fa-wifi"></i><div><strong>${navigator.onLine ? "متصل" : "غير متصل"}</strong><span>حالة الشبكة الحالية</span></div></div><div class="sync-card"><i class="fa-solid fa-hourglass-half"></i><div><strong>${pending}</strong><span>عمليات معلقة</span></div></div><div class="sync-card"><i class="fa-solid fa-circle-check"></i><div><strong>${synced}</strong><span>عمليات ناجحة</span></div></div><div class="sync-card"><i class="fa-solid fa-triangle-exclamation"></i><div><strong>${failed}</strong><span>عمليات فاشلة</span></div></div></section>
+    <section class="sync-summary"><div class="sync-card"><i class="fa-solid fa-wifi"></i><div><strong>${isOnline() ? "متصل" : "غير متصل"}</strong><span>حالة الشبكة الحالية</span></div></div><div class="sync-card"><i class="fa-solid fa-hourglass-half"></i><div><strong>${pending}</strong><span>عمليات معلقة</span></div></div><div class="sync-card"><i class="fa-solid fa-circle-check"></i><div><strong>${synced}</strong><span>عمليات ناجحة</span></div></div><div class="sync-card"><i class="fa-solid fa-triangle-exclamation"></i><div><strong>${failed}</strong><span>عمليات فاشلة</span></div></div></section>
     <section class="panel" style="margin-bottom:16px"><div class="panel-body"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px"><div><strong style="font-size:12px">حالة المزامنة</strong><div class="muted" style="font-size:9px">آخر مزامنة: ${last ? formatDate(last, true) : "لم تتم بعد"}</div></div><span>${pending ? `${pending} متبقية` : "مكتملة"}</span></div><div class="progress"><span style="width:${queue.length ? Math.round((synced / queue.length) * 100) : 100}%"></span></div></div></section>
     <section class="table-card"><header class="table-card-header"><div><h3>طابور العمليات المحلية</h3><p>يتم حفظ المسودات فقط دون اتصال، ثم يعيد الخادم فحصها.</p></div></header>${queue.length ? `<div class="table-scroll"><table class="data-table"><thead><tr><th>وقت الإنشاء</th><th>العملية</th><th>الجدول</th><th>المعرف المحلي</th><th>المحاولات</th><th>الحالة</th><th>الإجراء</th></tr></thead><tbody>${queue.map(x => `<tr><td>${formatDate(x.createdAt, true)}</td><td>${escapeHtml(x.operation)}</td><td>${escapeHtml(x.table)}</td><td><code>${escapeHtml(x.id.slice(0,12))}</code></td><td>${x.attempts}</td><td>${statusBadge(x.status)}</td><td><button class="row-action danger" data-remove-queue="${x.id}" title="حذف المسودة المحلية"><i class="fa-solid fa-trash"></i></button></td></tr>`).join("")}</tbody></table></div>` : `<div class="empty-state"><i class="fa-solid fa-cloud-circle-check"></i><h3>لا توجد عمليات معلقة</h3><p>كل البيانات متزامنة مع الخادم.</p></div>`}</section>`;
 }
@@ -693,10 +746,10 @@ async function renderSettings(tab = "general") {
   ];
   let panel = "";
   if (tab === "general") panel = `<h3>الإعدادات العامة</h3><p>هوية النظام والعملات وصيغة أرقام السندات.</p><form id="settings-form" class="form-grid"><div class="form-field"><label>اسم الجهة</label><input class="form-control" name="organization_name" value="${escapeHtml(s.organization_name || "")}"></div><div class="form-field"><label>اسم النظام</label><input class="form-control" name="system_name" value="${escapeHtml(s.system_name || "")}"></div><div class="form-field"><label>العملة الافتراضية</label><select class="form-control" name="currency"><option value="YER" ${s.currency === "YER" ? "selected" : ""}>ريال يمني</option><option value="SAR" ${s.currency === "SAR" ? "selected" : ""}>ريال سعودي</option><option value="USD" ${s.currency === "USD" ? "selected" : ""}>دولار أمريكي</option></select></div><div class="form-field"><label>سنوات الاحتفاظ بالبيانات</label><input class="form-control" type="number" name="retention_years" value="${s.retention_years || 10}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>`;
-  else if (tab === "policies") panel = `<h3>سياسات العمل والتحقق</h3><p>يمكن تغيير هذه الخيارات دون تعديل الكود.</p><form id="settings-form" class="form-grid"><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الصرف يحتاج اعتماداً</strong><small>تُحفظ سندات الموزعين تحت المراجعة قبل الترحيل.</small></div><label class="switch"><input name="require_payment_approval" type="checkbox" ${s.require_payment_approval ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالمسودات دون اتصال</strong><small>يحفظ النظام المسودة محلياً ويرسلها عند عودة الشبكة.</small></div><label class="switch"><input name="allow_offline_drafts" type="checkbox" ${s.allow_offline_drafts ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالترحيل النهائي دون اتصال</strong><small>غير موصى به لأن الرصيد يجب أن يعاد فحصه في الخادم.</small></div><label class="switch"><input name="allow_final_offline" type="checkbox" ${s.allow_final_offline ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field"><label>تنبيه الصلاحية قبل</label><input class="form-control" name="stock_alert_days" type="number" value="${s.stock_alert_days || 30}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ السياسات</button></div>`;
+  else if (tab === "policies") panel = `<h3>سياسات العمل والتحقق</h3><p>يمكن تغيير هذه الخيارات دون تعديل الكود.</p><form id="settings-form" class="form-grid"><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الصرف يحتاج اعتماداً</strong><small>تُحفظ سندات الموزعين تحت المراجعة قبل الترحيل.</small></div><label class="switch"><input name="require_payment_approval" type="checkbox" ${s.require_payment_approval ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل التلقائي لكل العمليات</strong><small>بعد الحفظ يتم ترحيل العمليات المالية والعينية تلقائياً بعد فحص الرصيد والصلاحيات. عند عدم الاتصال تحفظ العملية في قائمة المزامنة وتُرحل بعد عودة الشبكة.</small></div><label class="switch"><input name="auto_post_all_operations" type="checkbox" ${s.auto_post_all_operations ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالمسودات دون اتصال</strong><small>يحفظ النظام المسودة محلياً ويرسلها عند عودة الشبكة.</small></div><label class="switch"><input name="allow_offline_drafts" type="checkbox" ${s.allow_offline_drafts ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالترحيل النهائي دون اتصال</strong><small>غير موصى به لأن الرصيد يجب أن يعاد فحصه في الخادم.</small></div><label class="switch"><input name="allow_final_offline" type="checkbox" ${s.allow_final_offline ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field"><label>طريقة الترحيل والمزامنة</label><select class="form-control" name="sync_mode"><option value="automatic" ${s.sync_mode !== "manual" ? "selected" : ""}>تلقائية عند عودة الإنترنت</option><option value="manual" ${s.sync_mode === "manual" ? "selected" : ""}>يدوية من شاشة المزامنة</option></select></div><div class="form-field"><label>عدد محاولات الدخول</label><input class="form-control" name="max_login_attempts" type="number" min="1" max="20" value="${s.max_login_attempts || 5}"></div><div class="form-field"><label>مدة الإيقاف المؤقت بالدقائق</label><input class="form-control" name="lockout_minutes" type="number" min="1" max="1440" value="${s.lockout_minutes || 15}"></div><div class="form-field"><label>تنبيه الصلاحية قبل</label><input class="form-control" name="stock_alert_days" type="number" value="${s.stock_alert_days || 30}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ السياسات</button></div>`;
   else if (tab === "printing") panel = `<h3>إعدادات الطباعة</h3><p>تخصيص النصوص التي تظهر في السندات والتقارير.</p><form id="settings-form" class="form-grid"><div class="form-field full"><label>تذييل الطباعة</label><textarea class="form-control" name="print_footer">${escapeHtml(s.print_footer || "")}</textarea></div></form><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="ghost-button" onclick="window.print()"><i class="fa-solid fa-print"></i> اختبار الطباعة</button><button class="primary-button" data-save-settings>حفظ</button></div>`;
-  else if (tab === "backup") panel = `<h3>النسخ الاحتياطي والاستعادة</h3><p>في وضع Supabase تتم النسخ الاحتياطية من لوحة المشروع. في العرض التجريبي يمكنك تنزيل نسخة JSON.</p><div class="detail-grid"><div class="detail-item full"><span>إنشاء نسخة</span><strong>تنزيل جميع البيانات المحلية بصيغة JSON</strong><button class="secondary-button" data-download-backup style="margin-top:10px"><i class="fa-solid fa-download"></i> تنزيل النسخة</button></div><div class="detail-item full"><span>استعادة بيانات العرض</span><strong>إعادة البيانات التجريبية إلى حالتها الأصلية</strong><button class="danger-button" data-reset-demo style="margin-top:10px"><i class="fa-solid fa-rotate-left"></i> إعادة الضبط</button></div></div>`;
-  else panel = `<h3>حالة النظام</h3><p>معلومات الاتصال والواجهة الحالية.</p><div class="detail-grid"><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${navigator.onLine ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>لا تضع service_role key في ملفات الواجهة. استخدم anon/publishable key مع RLS ووظائف Supabase الإدارية.</strong></div></div>`;
+  else if (tab === "backup") panel = `<h3>النسخ الاحتياطي والاستعادة</h3><p>في وضع Supabase تتم النسخ الاحتياطية من لوحة المشروع. في العرض التجريبي يمكنك تنزيل نسخة JSON.</p><div class="detail-grid"><div class="detail-item full"><span>إنشاء نسخة</span><strong>تنزيل جميع الجداول داخل ملف ZIP، وكل جدول بصيغة CSV</strong><button class="secondary-button" data-download-backup style="margin-top:10px"><i class="fa-solid fa-download"></i> تنزيل النسخة</button></div><div class="detail-item full"><span>استعادة بيانات العرض</span><strong>إعادة البيانات التجريبية إلى حالتها الأصلية</strong><button class="danger-button" data-reset-demo style="margin-top:10px"><i class="fa-solid fa-rotate-left"></i> إعادة الضبط</button></div></div>`;
+  else panel = `<h3>حالة النظام</h3><p>معلومات الاتصال والواجهة الحالية.</p><div class="detail-grid"><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${isOnline() ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>لا تضع service_role key في ملفات الواجهة. استخدم anon/publishable key مع RLS ووظائف Supabase الإدارية.</strong></div></div>`;
   els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">إدارة الخيارات العامة والنسخ الاحتياطي وفق صلاحية مدير النظام.</div></section><section class="settings-layout"><nav class="settings-nav">${nav.map(x => `<button class="${tab === x[0] ? "active" : ""}" data-settings-tab="${x[0]}"><i class="${x[1]}"></i>${x[2]}</button>`).join("")}</nav><article class="settings-panel">${panel}</article></section>`;
 }
 
@@ -710,6 +763,7 @@ async function saveSettings() {
     payload[el.name] = el.type === "checkbox" ? el.checked : el.type === "number" ? Number(el.value) : el.value;
   });
   await dataService.update("system_settings", current.id, payload);
+  if (payload.sync_mode) localStorage.setItem("zakat_sync_mode", payload.sync_mode);
   toast("تم حفظ الإعدادات.");
 }
 
@@ -721,15 +775,127 @@ function exportRows(rows, filename = "report.csv") {
   toast("تم تجهيز ملف التصدير.");
 }
 
+
+async function openQuickDelivery() {
+  const role = state.session?.profile?.role || "";
+  const profileId = state.session?.profile?.id || null;
+  const [beneficiaryResult, delegateResult] = await Promise.all([
+    dataService.list("beneficiaries", { pageSize: 1000 }),
+    dataService.list("delegates", { pageSize: 1000 })
+  ]);
+
+  let beneficiaries = (beneficiaryResult.data || []).filter(x => x.status === "approved");
+  if (role === "distributor") {
+    const linkedDelegate = (delegateResult.data || []).find(d => d.profile_id === profileId || d.id === state.session?.profile?.delegate_id);
+    if (!linkedDelegate) return toast("لا يوجد موزع مرتبط بالحساب الحالي.", "error");
+    beneficiaries = beneficiaries.filter(b => b.delegate_id === linkedDelegate.id);
+  }
+
+  openModal({
+    title: "تسليم سريع لمستفيد",
+    eyebrow: "اختيار مستفيد مسجل وترحيل تلقائي",
+    body: `<form id="quick-delivery-form" class="form-grid">
+      <div class="form-field full quick-beneficiary-field">
+        <label>اسم المستفيد المسجل <span class="required">*</span></label>
+        <input id="quick-beneficiary-name" class="form-control" autocomplete="off" required placeholder="ابدأ بكتابة اسم مسجل في دليل المستفيدين">
+        <input id="quick-beneficiary-id" type="hidden">
+        <div id="quick-beneficiary-suggestions" class="quick-suggestions hidden"></div>
+        <span class="help-text">${role === "distributor" ? "تظهر فقط الأسماء المعتمدة والمرتبطة بك." : "يمكن للمدير والمشرف البحث في جميع المستفيدين المعتمدين."}</span>
+      </div>
+      <div class="form-field full"><label>المبلغ <span class="required">*</span></label><input id="quick-beneficiary-amount" class="form-control" type="number" min="1" step="0.01" required disabled placeholder="اختر المستفيد أولاً"></div>
+      <div class="form-field full"><span class="help-text">لا يمكن إنشاء مستفيد جديد من هذه الشاشة. يجب تسجيله واعتماده مسبقاً في دليل المستفيدين.</span></div>
+    </form>`,
+    footer: `<button class="ghost-button" data-close-modal>إلغاء</button><button class="primary-button" id="confirm-quick-delivery" disabled><i class="fa-solid fa-bolt"></i> تسليم وترحيل الآن</button>`
+  });
+
+  const nameInput = document.getElementById("quick-beneficiary-name");
+  const idInput = document.getElementById("quick-beneficiary-id");
+  const amountInput = document.getElementById("quick-beneficiary-amount");
+  const confirmButton = document.getElementById("confirm-quick-delivery");
+  const suggestions = document.getElementById("quick-beneficiary-suggestions");
+
+  const resetSelection = () => {
+    idInput.value = "";
+    amountInput.value = "";
+    amountInput.disabled = true;
+    amountInput.placeholder = "اختر المستفيد أولاً";
+    confirmButton.disabled = true;
+  };
+
+  const showSuggestions = () => {
+    const term = nameInput.value.trim().toLowerCase();
+    resetSelection();
+    const matches = beneficiaries.filter(b => !term || String(b.full_name || "").toLowerCase().includes(term)).slice(0, 12);
+    suggestions.innerHTML = matches.length
+      ? matches.map(b => `<button type="button" class="quick-suggestion-item" data-beneficiary-id="${escapeHtml(b.id)}" data-beneficiary-name="${escapeHtml(b.full_name)}"><strong>${escapeHtml(b.full_name)}</strong><span>${escapeHtml(b.file_no || b.phone || "")}</span></button>`).join("")
+      : `<div class="quick-suggestion-empty">لا يوجد مستفيد مسجل ومعتمد بهذا الاسم</div>`;
+    suggestions.classList.remove("hidden");
+  };
+
+  nameInput.addEventListener("input", showSuggestions);
+  nameInput.addEventListener("focus", showSuggestions);
+  suggestions.addEventListener("click", e => {
+    const item = e.target.closest("[data-beneficiary-id]");
+    if (!item) return;
+    idInput.value = item.dataset.beneficiaryId;
+    nameInput.value = item.dataset.beneficiaryName;
+    amountInput.disabled = false;
+    amountInput.placeholder = "أدخل المبلغ";
+    confirmButton.disabled = false;
+    suggestions.classList.add("hidden");
+    amountInput.focus();
+  });
+
+  confirmButton.addEventListener("click", async () => {
+    const beneficiaryId = idInput.value || null;
+    const selected = beneficiaries.find(b => String(b.id) === String(beneficiaryId));
+    const amount = Number(amountInput.value);
+    if (!selected) return toast("يجب اختيار مستفيد مسجل من القائمة الظاهرة.", "error");
+    if (!(amount > 0)) return toast("أدخل مبلغاً صحيحاً أكبر من صفر.", "error");
+    confirmButton.disabled = true;
+    try {
+      await dataService.quickDelivery({ beneficiary_name: selected.full_name, beneficiary_id: selected.id, amount });
+      closeModal();
+      toast("تم التسليم والترحيل بنجاح.");
+      await refreshCurrentScreen();
+    } catch (error) {
+      toast(error.message || "تعذر التسليم السريع.", "error");
+      confirmButton.disabled = false;
+    }
+  });
+}
+function csvEscape(value) { return `"${String(value ?? "").replaceAll('"','""')}"`; }
+async function downloadAllTablesZip() {
+  if (!window.JSZip) throw new Error("مكتبة ZIP غير متاحة.");
+  const all = await dataService.exportAllTables();
+  const zip = new JSZip();
+  Object.entries(all).forEach(([table, rows]) => {
+    const safeRows = Array.isArray(rows) ? rows : [];
+    const keys = [...new Set(safeRows.flatMap(r => Object.keys(r || {})))];
+    const csv = "\uFEFF" + (keys.length ? [keys.map(csvEscape).join(","), ...safeRows.map(r => keys.map(k => csvEscape(typeof r[k] === "object" && r[k] !== null ? JSON.stringify(r[k]) : r[k])).join(","))].join("\n") : "");
+    zip.file(`${table}.csv`, csv);
+  });
+  zip.file("backup_metadata.json", JSON.stringify({ exported_at: new Date().toISOString(), tables: Object.keys(all) }, null, 2));
+  const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
+  const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href=url; a.download=`zakat-full-backup-${new Date().toISOString().slice(0,10)}.zip`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
+}
+
 async function refreshCurrentScreen() {
   await navigate(state.currentScreen, false);
 }
 
 function updateConnectionStatus() {
   const chip = document.getElementById("connection-chip");
-  if (!chip) return;
-  chip.classList.toggle("offline", !navigator.onLine);
-  chip.querySelector("span:last-child").textContent = navigator.onLine ? "متصل" : "غير متصل";
+  const banner = document.getElementById("offline-banner");
+  const online = isOnline();
+  if (chip) {
+    chip.classList.toggle("offline", !online);
+    const label = chip.querySelector("span:last-child");
+    if (label) label.textContent = online ? "متصل" : "غير متصل";
+  }
+  if (banner) banner.classList.toggle("hidden", online);
+  document.body.classList.toggle("is-offline", !online);
+  document.documentElement.dataset.connection = online ? "online" : "offline";
 }
 
 function updateQueueBadge() {
@@ -769,6 +935,7 @@ async function handleGlobalClick(event) {
   if (event.target.closest("[data-add-record]")) return openRecordForm(state.currentConfig);
   const quick = event.target.closest("[data-quick-add]");
   if (quick) return openRecordForm(screenConfigs[configKeyMap[quick.dataset.quickAdd]]);
+  if (event.target.closest("[data-quick-delivery]")) return openQuickDelivery();
   const rowAction = event.target.closest("[data-row-action]");
   if (rowAction) return handleRowAction(rowAction.dataset.rowAction, rowAction.dataset.id);
   const page = event.target.closest("[data-page]");
@@ -795,7 +962,7 @@ async function handleGlobalClick(event) {
   const settingsTab = event.target.closest("[data-settings-tab]");
   if (settingsTab) return renderSettings(settingsTab.dataset.settingsTab);
   if (event.target.closest("[data-save-settings]")) { try { await saveSettings(); } catch (error) { toast(error.message, "error"); } return; }
-  if (event.target.closest("[data-download-backup]")) { downloadText(`zakat-backup-${new Date().toISOString().slice(0,10)}.json`, JSON.stringify(dataService.exportDemoData(), null, 2), "application/json"); return toast("تم تنزيل النسخة الاحتياطية."); }
+  if (event.target.closest("[data-download-backup]")) { try { await downloadAllTablesZip(); toast("تم تنزيل نسخة ZIP لجميع الجداول."); } catch (error) { toast(error.message || "تعذر إنشاء النسخة.", "error"); } return; }
   if (event.target.closest("[data-reset-demo]")) {
     const ok = await confirmDialog("سيتم حذف تعديلات العرض التجريبي وإعادة البيانات الأصلية.", "إعادة ضبط البيانات", "إعادة الضبط", true);
     if (ok) { await dataService.resetDemo(); toast("تمت إعادة البيانات التجريبية."); renderSettings("backup"); }
@@ -805,8 +972,12 @@ async function handleGlobalClick(event) {
 function bindEvents() {
   document.addEventListener("click", handleGlobalClick);
   window.addEventListener("popstate", () => navigate(location.hash.replace("#", "") || "dashboard", false));
-  window.addEventListener("online", () => { updateConnectionStatus(); updateQueueBadge(); toast("عاد الاتصال بالشبكة.", "info"); });
-  window.addEventListener("offline", () => { updateConnectionStatus(); toast("انقطع الاتصال. يمكن متابعة حفظ المسودات محلياً.", "warning"); });
+  subscribeConnection(({ online }) => {
+    const wasOffline = document.body.classList.contains("is-offline");
+    updateConnectionStatus();
+    updateQueueBadge();
+    if (wasOffline && online) toast("عاد الاتصال الفعلي بالخادم.", "info");
+  });
   window.addEventListener("zakat:queue-change", updateQueueBadge);
   document.getElementById("menu-toggle").addEventListener("click", () => els.sidebar.classList.add("open"));
   document.getElementById("sidebar-close").addEventListener("click", () => els.sidebar.classList.remove("open"));
@@ -846,7 +1017,7 @@ function bindEvents() {
     input.type = input.type === "password" ? "text" : "password";
     e.currentTarget.innerHTML = `<i class="fa-regular ${input.type === "password" ? "fa-eye" : "fa-eye-slash"}"></i>`;
   });
-  document.getElementById("forgot-password").addEventListener("click", () => toast("استخدم استعادة كلمة المرور من بريدك أو راجع مدير النظام.", "info"));
+  document.getElementById("forgot-password").addEventListener("click", () => toast("راجع مدير النظام لإعادة تعيين كلمة المرور.", "info"));
   document.getElementById("login-form").addEventListener("submit", handleLogin);
 }
 
@@ -858,7 +1029,7 @@ function debounce(fn, delay) {
 async function handleLogin(event) {
   event.preventDefault();
   const button = event.currentTarget.querySelector("button[type=submit]");
-  const identifier = document.getElementById("login-email").value.trim();
+  const identifier = document.getElementById("login-phone").value.trim();
   const password = document.getElementById("login-password").value;
   const remember = document.getElementById("remember-device").checked;
   button.disabled = true; button.innerHTML = `<span>جاري التحقق...</span><span class="spinner" style="width:20px;height:20px;border-width:2px;border-top-color:white"></span>`;
@@ -869,7 +1040,7 @@ async function handleLogin(event) {
 
 function openProfileMenu() {
   const profile = state.session.profile || {};
-  openModal({ title: profile.full_name || "حسابي", eyebrow: roleLabels[profile.role] || "مستخدم", body: `<div class="detail-grid"><div class="detail-item"><span>اسم المستخدم</span><strong>${escapeHtml(profile.username || "-")}</strong></div><div class="detail-item"><span>البريد</span><strong>${escapeHtml(profile.email || state.session.user?.email || "-")}</strong></div><div class="detail-item"><span>الدور</span><strong>${escapeHtml(roleLabels[profile.role] || profile.role || "-")}</strong></div><div class="detail-item"><span>الحالة</span><strong>${profile.is_active !== false ? "نشط" : "موقوف"}</strong></div></div>`, footer: `<button class="danger-button" id="logout-button"><i class="fa-solid fa-right-from-bracket"></i> تسجيل الخروج</button><button class="ghost-button" data-close-modal>إغلاق</button>` });
+  openModal({ title: profile.full_name || "حسابي", eyebrow: roleLabels[profile.role] || "مستخدم", body: `<div class="detail-grid"><div class="detail-item"><span>اسم المستخدم</span><strong>${escapeHtml(profile.username || "-")}</strong></div><div class="detail-item"><span>الهاتف</span><strong>${escapeHtml(profile.phone || state.session.user?.phone || "-")}</strong></div><div class="detail-item"><span>الدور</span><strong>${escapeHtml(roleLabels[profile.role] || profile.role || "-")}</strong></div><div class="detail-item"><span>الحالة</span><strong>${profile.is_active !== false ? "نشط" : "موقوف"}</strong></div></div>`, footer: `<button class="danger-button" id="logout-button"><i class="fa-solid fa-right-from-bracket"></i> تسجيل الخروج</button><button class="ghost-button" data-close-modal>إغلاق</button>` });
   document.getElementById("logout-button").addEventListener("click", async () => { await dataService.signOut(); state.session = null; closeModal(); showLogin(); toast("تم تسجيل الخروج.", "info"); });
 }
 
@@ -877,6 +1048,7 @@ async function init() {
   document.getElementById("current-year").textContent = new Date().getFullYear();
   if (!dataService.demoMode) document.getElementById("demo-login-note").classList.add("hidden");
   bindEvents();
+await checkConnectivity({ timeout: 6500, silent: true });
   await dataService.initialize();
   state.session = await dataService.getSession();
   if (state.session) showApp(); else showLogin();
