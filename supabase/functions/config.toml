@@ -1,0 +1,7 @@
+project_id = "zakat-management-system"
+
+[functions.create-user]
+verify_jwt = true
+
+[functions.reset-user-password]
+verify_jwt = true
