@@ -8,11 +8,13 @@
   <title>نظام إدارة الزكاة والتبرعات</title>
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
   <link rel="manifest" href="manifest.webmanifest" />
-  <link rel="preconnect" href="https://fonts.googleapis.com" />
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet" />
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css" />
+  <script>window.addEventListener("DOMContentLoaded",()=>{const t=document.createElement("i");t.className="fa-solid fa-laptop";t.style.cssText="position:absolute;visibility:hidden";document.body.appendChild(t);const ok=getComputedStyle(t,"::before").content!=="none";document.documentElement.classList.toggle("fontawesome-missing",!ok);t.remove();});</script>
   <link rel="stylesheet" href="css/styles.css" />
+  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
 </head>
 <body>
   <noscript>يجب تفعيل JavaScript لتشغيل النظام.</noscript>
@@ -45,10 +47,10 @@
         <p class="muted">أدخل بيانات حسابك للانتقال إلى لوحة التحكم.</p>
 
         <form id="login-form" class="auth-form" autocomplete="on">
-          <label class="field-label" for="login-email">البريد الإلكتروني أو اسم المستخدم</label>
+          <label class="field-label" for="login-phone">رقم الهاتف</label>
           <div class="input-icon">
             <i class="fa-regular fa-user"></i>
-            <input id="login-email" name="email" type="text" placeholder="admin@example.com" autocomplete="username" required />
+            <input id="login-phone" name="phone" type="tel" inputmode="tel" placeholder="مثال: 777123456" autocomplete="tel" required />
           </div>
 
           <div class="label-row">
@@ -67,7 +69,7 @@
 
         <div id="demo-login-note" class="demo-note">
           <i class="fa-solid fa-flask"></i>
-          <div><strong>وضع العرض التجريبي</strong><span>استخدم أي بريد وكلمة مرور لا تقل عن 6 أحرف.</span></div>
+          <div><strong>وضع العرض التجريبي</strong><span>استخدم الرقم 777000111 وكلمة مرور لا تقل عن 6 أحرف. لا توجد رسائل SMS أو OTP.</span></div>
         </div>
       </div>
       <p class="copyright">© <span id="current-year"></span> نظام إدارة الزكاة والتبرعات</p>
@@ -113,6 +115,11 @@
 
       <main id="page-content" class="page-content" tabindex="-1"></main>
     </div>
+  </div>
+
+  <div id="offline-banner" class="offline-banner hidden" role="status" aria-live="polite" aria-atomic="true">
+    <span class="offline-banner-icon" aria-hidden="true"><i class="fa-solid fa-wifi"></i></span>
+    <span class="offline-banner-copy"><strong>غير متصل</strong><small>العمل من النسخة المحلية</small></span>
   </div>
 
   <div id="modal-root" class="modal-root hidden" aria-hidden="true">

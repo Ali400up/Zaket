@@ -1,18 +1,9 @@
-const CACHE_NAME = "zakat-app-v1";
+const CACHE_NAME = "zakat-v11-rc1-cache";
 const STATIC_ASSETS = [
-  "/",
-  "/index.html",
-  "/css/styles.css",
-  "/js/config.js",
-  "/js/app.js",
-  "/js/data-service.js",
-  "/js/demo-data.js",
-  "/js/offline.js",
-  "/js/screen-config.js",
-  "/js/supabase-client.js",
-  "/js/ui.js",
-  "/assets/logo.svg",
-  "/manifest.webmanifest"
+  "/", "/index.html", "/css/styles.css", "/js/config.js", "/js/app.js",
+  "/js/data-service.js", "/js/connectivity.js", "/js/demo-data.js",
+  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js",
+  "/js/ui.js", "/assets/logo.svg", "/manifest.webmanifest"
 ];
 
 self.addEventListener("install", event => {
@@ -25,13 +16,32 @@ self.addEventListener("activate", event => {
 
 self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
-  const url = new URL(event.request.url);
-  if (url.origin !== self.location.origin) return;
-  event.respondWith(
-    caches.match(event.request).then(cached => cached || fetch(event.request).then(response => {
-      const clone = response.clone();
-      caches.open(CACHE_NAME).then(cache => cache.put(event.request, clone));
+  const requestUrl = new URL(event.request.url);
+
+  // مهم: لا نعترض أي طلب خارجي، بما في ذلك فحص الإنترنت وSupabase.
+  // وإلا قد تعيد الذاكرة المؤقتة استجابة قديمة وتعرض "متصل" أثناء انقطاع الشبكة.
+  if (requestUrl.origin !== self.location.origin) return;
+
+  event.respondWith((async () => {
+    const cached = await caches.match(event.request);
+    const networkPromise = fetch(event.request).then(async response => {
+      if (response && response.ok) {
+        const cache = await caches.open(CACHE_NAME);
+        await cache.put(event.request, response.clone());
+      }
       return response;
-    }).catch(() => caches.match("/index.html")))
-  );
+    });
+
+    if (cached) {
+      event.waitUntil(networkPromise.catch(() => null));
+      return cached;
+    }
+
+    try {
+      return await networkPromise;
+    } catch {
+      if (event.request.mode === "navigate") return caches.match("/index.html");
+      return new Response("", { status: 503, statusText: "Offline" });
+    }
+  })());
 });
