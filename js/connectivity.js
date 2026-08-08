@@ -11,8 +11,11 @@ let state = {
 
 let activeCheck = null;
 const listeners = new Set();
+let monitoringStopped = false;
+let periodicCheckTimer = null;
 
 function notify() {
+  if (monitoringStopped) return;
   const detail = { ...state };
   listeners.forEach(listener => {
     try { listener(detail); }
@@ -80,6 +83,7 @@ export function subscribeConnection(listener) {
 }
 
 export async function checkConnectivity({ timeout = 5000, silent = false } = {}) {
+  if (monitoringStopped) return false;
   if (activeCheck) return activeCheck;
 
   activeCheck = (async () => {
@@ -100,6 +104,7 @@ export async function checkConnectivity({ timeout = 5000, silent = false } = {})
       }
     }
 
+    if (monitoringStopped) return false;
     state.online = success;
     state.verified = true;
     state.lastError = success ? null : (lastError?.message || "تعذر الوصول إلى خادم فحص الاتصال");
@@ -119,12 +124,13 @@ export async function checkConnectivity({ timeout = 5000, silent = false } = {})
 
 window.addEventListener("online", () => checkConnectivity({ timeout: 4500, silent: true }));
 window.addEventListener("offline", () => {
+  if (monitoringStopped) return;
   state.online = false;
   state.verified = true;
   state.lastCheckedAt = new Date().toISOString();
   state.lastError = "أبلغ النظام بانقطاع الشبكة";
   notify();
-  setTimeout(() => checkConnectivity({ timeout: 3500, silent: true }), 500);
+  window.setTimeout(() => checkConnectivity({ timeout: 3500, silent: true }), 500);
 });
 
 document.addEventListener("visibilitychange", () => {
@@ -133,4 +139,19 @@ document.addEventListener("visibilitychange", () => {
   }
 });
 
-setInterval(() => checkConnectivity({ timeout: 4500, silent: true }), 15000);
+periodicCheckTimer = window.setInterval(() => {
+  if (!monitoringStopped) checkConnectivity({ timeout: 4500, silent: true });
+}, 15000);
+
+function stopConnectivityMonitoring() {
+  if (monitoringStopped) return;
+  monitoringStopped = true;
+  if (periodicCheckTimer !== null) {
+    window.clearInterval(periodicCheckTimer);
+    periodicCheckTimer = null;
+  }
+  listeners.clear();
+}
+
+window.addEventListener("pagehide", stopConnectivityMonitoring, { once: true });
+window.addEventListener("beforeunload", stopConnectivityMonitoring, { once: true });

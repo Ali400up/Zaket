@@ -2,13 +2,15 @@ import { demoData } from "./demo-data.js";
 import { supabase, isSupabaseConfigured, getCurrentSession, getCurrentProfile } from "./supabase-client.js";
 import { queueOperation, syncOfflineQueue } from "./offline.js";
 import { isOnline } from "./connectivity.js";
+import { getDeviceFingerprint, getDeviceName } from "./device-identity.js";
 
-const DB_KEY = "zakat_demo_database_v1";
-const SESSION_KEY = "zakat_demo_session_v1";
+const DB_KEY = "zakat_demo_database_v11_2";
+const SESSION_KEY = "zakat_demo_session_v11_2";
 const config = window.ZAKAT_CONFIG || {};
-const LIVE_CACHE_KEY = "zakat_live_cache_v10";
-const OFFLINE_SESSION_KEY = "zakat_offline_session_v10";
-const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","delegate_advances","items","warehouses","stock_balances","system_settings"]);
+const LIVE_CACHE_KEY = "zakat_live_cache_v11_2";
+const OFFLINE_SESSION_KEY = "zakat_offline_session_v11_2";
+const USER_SESSION_KEY = "zakat_active_user_session_v11_2";
+const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","items","warehouses","stock_balances","system_settings"]);
 
 function readLiveCache() {
   try { return JSON.parse(localStorage.getItem(LIVE_CACHE_KEY) || "{}"); } catch { return {}; }
@@ -22,14 +24,6 @@ function cacheRows(table, rows) {
 function cachedRows(table) {
   return readLiveCache()[table]?.rows || [];
 }
-function deviceFingerprint() {
-  const raw = [navigator.userAgent, navigator.language, screen.width, screen.height, Intl.DateTimeFormat().resolvedOptions().timeZone].join("|");
-  let hash = 2166136261;
-  for (let i=0;i<raw.length;i++) { hash ^= raw.charCodeAt(i); hash = Math.imul(hash, 16777619); }
-  return `dev-${(hash>>>0).toString(16)}`;
-}
-function deviceName() { return `${navigator.platform || "Web"} - ${navigator.userAgent.includes("Mobile") ? "هاتف" : "حاسوب"}`; }
-
 const viewMap = {
   profiles: "v_profiles",
   delegates: "v_delegates",
@@ -46,7 +40,6 @@ const viewMap = {
   cash_receipts: "v_cash_receipts",
   cash_payments: "v_cash_payments",
   cash_transfers: "v_cash_transfers",
-  delegate_advances: "v_delegate_advances",
   distribution_assignments: "v_distribution_assignments",
   authorized_devices: "v_authorized_devices",
   login_attempts: "v_login_attempts",
@@ -79,7 +72,17 @@ const childTableMap = {
   in_kind_payments: { table: "in_kind_payment_details", foreignKey: "payment_id" }
 };
 
-const idempotentTables = new Set(["cash_receipts", "cash_payments", "in_kind_receipts", "in_kind_payments"]);
+const idempotentTables = new Set([
+  "cash_receipts", "cash_payments", "cash_transfers", "campaign_funding",
+  "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments", "baskets"
+]);
+
+const atomicDraftRpcMap = {
+  in_kind_receipts: "save_in_kind_receipt_draft",
+  campaign_in_kind_funding: "save_campaign_in_kind_funding_draft",
+  in_kind_payments: "save_in_kind_payment_draft",
+  baskets: "save_basket_with_items"
+};
 
 function clone(value) {
   return typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
@@ -135,9 +138,8 @@ function enrichDemoRow(db, table, row) {
   const r = { ...row };
   switch (table) {
     case "delegates": {
-      const receipts = db.cash_receipts.filter(x => statusIsPosted(x) && x.delegate_id === r.id);
-      const payments = db.cash_payments.filter(x => statusIsPosted(x) && x.delegate_id === r.id);
-      r.cash_balance = sum(receipts, "amount") - sum(payments, "amount");
+      const allocations = (db.campaign_distributors || []).filter(x => x.delegate_id === r.id);
+      r.cash_balance = allocations.reduce((total, x) => total + Number(x.allocated_amount || 0) - Number(x.spent_amount || 0) - Number(x.returned_amount || 0), 0);
       r.inventory_count = db.inventory_lots.filter(x => x.delegate_id === r.id).reduce((a, x) => a + Number(x.quantity_available || 0), 0);
       break;
     }
@@ -151,7 +153,7 @@ function enrichDemoRow(db, table, row) {
       r.delegate_name = relationName(db, "delegates", r.delegate_id, "full_name");
       break;
     case "campaigns": {
-      const receipts = db.cash_receipts.filter(x => statusIsPosted(x) && x.campaign_id === r.id);
+      const receipts = (db.campaign_funding || []).filter(x => statusIsPosted(x) && x.campaign_id === r.id);
       const payments = db.cash_payments.filter(x => statusIsPosted(x) && x.campaign_id === r.id);
       r.received_total = sum(receipts, "amount");
       r.spent_total = sum(payments, "amount");
@@ -178,15 +180,17 @@ function enrichDemoRow(db, table, row) {
       r.remaining_amount = Number(r.allocated_amount || 0) - Number(r.spent_amount || 0) - Number(r.returned_amount || 0);
       break;
     }
+    case "campaign_in_kind_funding": {
+      r.campaign_name = relationName(db, "campaigns", r.campaign_id);
+      r.warehouse_name = relationName(db, "warehouses", r.warehouse_id);
+      r.items_count = (r.details || []).length;
+      r.total_quantity = sum(r.details || [], "quantity");
+      r.items_summary = (r.details || []).map(x => `${relationName(db, "items", x.item_id)} × ${x.quantity}`).join("، ");
+      break;
+    }
     case "cash_transfers": {
       r.from_cashbox_name = relationName(db, "cashboxes", r.from_cashbox_id);
       r.to_cashbox_name = relationName(db, "cashboxes", r.to_cashbox_id);
-      break;
-    }
-    case "delegate_advances": {
-      r.delegate_name = relationName(db, "delegates", r.delegate_id, "full_name");
-      r.cashbox_name = relationName(db, "cashboxes", r.cashbox_id, "name");
-      r.remaining_amount = Number(r.amount || 0) - Number(r.spent_amount || 0);
       break;
     }
     case "cash_receipts": {
@@ -280,6 +284,16 @@ function validateDemoCreate(db, table, data, editingId = null) {
   if (table === "items") duplicate("name", "الصنف موجود مسبقاً.");
   if (["beneficiary_categories", "health_conditions"].includes(table)) duplicate("name", "القيمة موجودة مسبقاً.");
   if (table === "campaigns" && data.start_date && data.end_date && data.end_date < data.start_date) throw new Error("تاريخ النهاية يسبق تاريخ البداية.");
+  if (table === "campaign_distributors") {
+    const campaignId = data.campaign_id || findById(db, table, editingId)?.campaign_id;
+    const allocatedAmount = Number(data.allocated_amount ?? findById(db, table, editingId)?.allocated_amount ?? 0);
+    const returnedAmount = Number(data.returned_amount ?? findById(db, table, editingId)?.returned_amount ?? 0);
+    const spentAmount = Number(data.spent_amount ?? findById(db, table, editingId)?.spent_amount ?? 0);
+    if (allocatedAmount < spentAmount + returnedAmount) throw new Error("المبلغ المخصص أقل من المصروف والمرتجع.");
+    const funded = sum((db.campaign_funding || []).filter(x => x.campaign_id === campaignId && x.status === "posted"), "amount");
+    const committed = (db.campaign_distributors || []).filter(x => x.campaign_id === campaignId && x.id !== editingId).reduce((total, x) => total + Number(x.allocated_amount || 0) - Number(x.returned_amount || 0), 0);
+    if (committed + allocatedAmount - returnedAmount > funded) throw new Error("المبلغ المخصص يتجاوز الرصيد غير الموزع للحملة.");
+  }
 }
 
 function generateIdentifiers(db, table, data) {
@@ -290,6 +304,7 @@ function generateIdentifiers(db, table, data) {
   if (table === "in_kind_receipts" && !result.voucher_no) result.voucher_no = nextNumber(db.in_kind_receipts, "IKR");
   if (table === "in_kind_payments" && !result.voucher_no) result.voucher_no = nextNumber(db.in_kind_payments, "IKP");
   if (table === "campaign_funding" && !result.funding_no) result.funding_no = nextNumber(db.campaign_funding || [], "CF", "funding_no");
+  if (table === "campaign_in_kind_funding" && !result.funding_no) result.funding_no = nextNumber(db.campaign_in_kind_funding || [], "CIKF", "funding_no");
   if (table === "cash_transfers" && !result.transfer_no) result.transfer_no = nextNumber(db.cash_transfers || [], "CT", "transfer_no");
   if (table === "account_closings" && !result.closing_no) result.closing_no = nextNumber(db.account_closings, "CLS", "closing_no");
   return result;
@@ -300,6 +315,22 @@ function demoCashboxBalance(db, cashboxId) {
   if (!box) return 0;
   const ledger = (db.cashbox_ledger || []).filter(x => x.cashbox_id === cashboxId);
   return Number(box.opening_balance || 0) + sum(ledger, "credit") - sum(ledger, "debit");
+}
+
+function buildDemoStockBalances(db) {
+  const groups = new Map();
+  for (const lot of db.inventory_lots || []) {
+    if (!lot.warehouse_id || lot.campaign_id) continue;
+    const key = `${lot.warehouse_id}|${lot.item_id}`;
+    const current = groups.get(key) || { id: key, warehouse_id: lot.warehouse_id, item_id: lot.item_id, available_qty: 0, reserved_qty: 0, damaged_qty: 0 };
+    current.available_qty += Number(lot.quantity_available || 0);
+    current.damaged_qty += Number(lot.quantity_damaged || 0);
+    groups.set(key, current);
+  }
+  return [...groups.values()].map(row => {
+    const item = findById(db, "items", row.item_id) || {};
+    return { ...row, warehouse_name: relationName(db, "warehouses", row.warehouse_id), item_name: item.name || "-", unit_name: item.unit || "-", min_stock: Number(item.min_stock || 0), status: row.available_qty <= Number(item.min_stock || 0) ? "review" : "active" };
+  });
 }
 
 function addDemoLedger(db, entry) {
@@ -329,8 +360,17 @@ function demoPostCashTransfer(db, id) {
   const record = findById(db, "cash_transfers", id);
   if (!record) throw new Error("التحويل غير موجود.");
   if (record.status === "posted") return record;
+  if (record.status === "cancelled") throw new Error("لا يمكن ترحيل تحويل ملغي.");
   if (record.from_cashbox_id === record.to_cashbox_id) throw new Error("لا يمكن التحويل إلى نفس الصندوق.");
-  if (demoCashboxBalance(db, record.from_cashbox_id) < Number(record.amount || 0)) throw new Error("رصيد الصندوق المحول منه غير كافٍ.");
+  const from = findById(db, "cashboxes", record.from_cashbox_id);
+  const to = findById(db, "cashboxes", record.to_cashbox_id);
+  if (!from || !to) throw new Error("تعذر العثور على أحد الصندوقين.");
+  if (!from.is_active || !to.is_active) throw new Error("لا يمكن التحويل من أو إلى صندوق موقوف.");
+  if (from.currency !== to.currency) throw new Error(`لا يمكن التحويل بين عملتين مختلفتين (${from.currency} و${to.currency}).`);
+  if (!(Number(record.amount) > 0)) throw new Error("مبلغ التحويل يجب أن يكون أكبر من صفر.");
+  const available = demoCashboxBalance(db, record.from_cashbox_id);
+  if (available < Number(record.amount || 0)) throw new Error(`رصيد الصندوق المحول منه غير كافٍ. المتاح ${available.toLocaleString("ar")} ${from.currency}.`);
+  record.currency = from.currency;
   addDemoLedger(db, { cashbox_id: record.from_cashbox_id, transaction_type: "transfer_out", reference_table: "cash_transfers", reference_id: record.id, debit: Number(record.amount), currency: record.currency || "YER", description: `تحويل صادر - ${record.transfer_no}` });
   addDemoLedger(db, { cashbox_id: record.to_cashbox_id, transaction_type: "transfer_in", reference_table: "cash_transfers", reference_id: record.id, credit: Number(record.amount), currency: record.currency || "YER", description: `تحويل وارد - ${record.transfer_no}` });
   record.status = "posted"; record.posted_at = new Date().toISOString();
@@ -355,25 +395,32 @@ function demoPostCashReceipt(db, id) {
 function demoPostCashPayment(db, id) {
   const record = findById(db, "cash_payments", id);
   if (!record) throw new Error("سند الصرف غير موجود.");
+  if (record.status === "posted") return record;
+  if (record.status === "cancelled") throw new Error("السند ملغي.");
   const beneficiary = findById(db, "beneficiaries", record.beneficiary_id);
   const campaign = findById(db, "campaigns", record.campaign_id);
   const delegate = findById(db, "delegates", record.delegate_id);
-  const receipt = findById(db, "cash_receipts", record.cash_receipt_id);
   if (beneficiary?.status !== "approved") throw new Error("المستفيد غير معتمد.");
-  if (campaign?.status !== "open") throw new Error("الحملة مغلقة.");
+  if (campaign?.status !== "open" || !["cash", "mixed"].includes(campaign.campaign_type)) throw new Error("الحملة مغلقة أو لا تسمح بالصرف النقدي.");
   if (!delegate?.is_active) throw new Error("الموزع موقوف.");
-  if (receipt?.status !== "posted") throw new Error("سند القبض غير مرحّل.");
+  if (beneficiary.delegate_id && beneficiary.delegate_id !== delegate.id) throw new Error("المستفيد غير مربوط بالموزع المحدد.");
+  const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+  const settings = (db.system_settings || [])[0] || {};
+  if (session?.profile?.role === "distributor" && settings.require_payment_approval !== false && record.status !== "approved") throw new Error("سند الموزع يحتاج اعتماد المشرف قبل الترحيل.");
+  if (record.override_reason && session?.profile?.role !== "admin") throw new Error("الاستثناء من منع التكرار متاح لمدير النظام فقط.");
   const duplicate = db.cash_payments.find(x => x.id !== id && statusIsPosted(x) && x.beneficiary_id === record.beneficiary_id && x.campaign_id === record.campaign_id);
   if (duplicate && !record.override_reason) throw new Error("المستفيد استلم سابقاً من الحملة.");
   const amount = Number(record.amount || 0);
-  const receiptUsed = sum(db.cash_payments.filter(x => x.id !== id && statusIsPosted(x) && x.cash_receipt_id === record.cash_receipt_id), "amount");
-  if (amount > Number(receipt.amount) - receiptUsed) throw new Error("سند القبض لا يحتوي رصيداً كافياً.");
-  const campaignReceipts = sum(db.cash_receipts.filter(x => statusIsPosted(x) && x.campaign_id === record.campaign_id), "amount");
+  if (!(amount > 0)) throw new Error("مبلغ الصرف يجب أن يكون أكبر من صفر.");
+  const campaignReceipts = sum((db.campaign_funding || []).filter(x => statusIsPosted(x) && x.campaign_id === record.campaign_id), "amount");
   const campaignPayments = sum(db.cash_payments.filter(x => x.id !== id && statusIsPosted(x) && x.campaign_id === record.campaign_id), "amount");
-  if (amount > campaignReceipts - campaignPayments) throw new Error("رصيد الحملة غير كافٍ.");
-  const delegateReceipts = sum(db.cash_receipts.filter(x => statusIsPosted(x) && x.delegate_id === record.delegate_id), "amount");
-  const delegatePayments = sum(db.cash_payments.filter(x => x.id !== id && statusIsPosted(x) && x.delegate_id === record.delegate_id), "amount");
-  if (amount > delegateReceipts - delegatePayments) throw new Error("رصيد الموزع غير كافٍ.");
+  if (amount > campaignReceipts - campaignPayments) throw new Error(`رصيد الحملة غير كافٍ. المتاح ${campaignReceipts - campaignPayments}.`);
+  const assignment = (db.campaign_distributors || []).find(x => x.campaign_id === record.campaign_id && x.delegate_id === record.delegate_id && x.status === "active");
+  if (!assignment) throw new Error("الموزع غير مخصص لهذه الحملة.");
+  const remaining = Number(assignment.allocated_amount || 0) - Number(assignment.spent_amount || 0) - Number(assignment.returned_amount || 0);
+  if (amount > remaining) throw new Error(`رصيد الموزع المخصص من الحملة غير كافٍ. المتاح ${remaining}.`);
+  assignment.spent_amount = Number(assignment.spent_amount || 0) + amount;
+  if (Number(assignment.allocated_amount || 0) - assignment.spent_amount - Number(assignment.returned_amount || 0) <= 0) assignment.status = "settled";
   record.status = "posted";
   record.posted_at = new Date().toISOString();
   return record;
@@ -382,8 +429,8 @@ function demoPostCashPayment(db, id) {
 function demoPostInKindReceipt(db, id) {
   const record = findById(db, "in_kind_receipts", id);
   if (!record) throw new Error("سند القبض العيني غير موجود.");
-  const campaign = findById(db, "campaigns", record.campaign_id);
-  if (campaign?.status !== "open") throw new Error("الحملة مغلقة.");
+  const warehouse = findById(db, "warehouses", record.warehouse_id);
+  if (!warehouse || warehouse.is_active === false) throw new Error("المخزن المستلم غير موجود أو موقوف.");
   if (record.status === "posted") return record;
   for (const detail of record.details || []) {
     const qty = Number(detail.valid_qty || 0);
@@ -391,10 +438,35 @@ function demoPostInKindReceipt(db, id) {
     if (qty <= 0) throw new Error("الكمية الصالحة يجب أن تكون أكبر من صفر.");
     if (detail.expiry_date && new Date(detail.expiry_date) <= new Date()) throw new Error("لا يمكن ترحيل صنف منتهي الصلاحية.");
     db.inventory_lots.push({
-      id: uid("lot"), item_id: detail.item_id, campaign_id: record.campaign_id, delegate_id: record.delegate_id,
+      id: uid("lot"), item_id: detail.item_id, warehouse_id: record.warehouse_id, campaign_id: null, delegate_id: null,
       lot_no: detail.lot_no || null, expiry_date: detail.expiry_date || null,
       quantity_received: qty + damaged, quantity_damaged: damaged, quantity_available: qty, created_at: new Date().toISOString()
     });
+  }
+  record.status = "posted";
+  record.posted_at = new Date().toISOString();
+  return record;
+}
+
+function demoPostCampaignInKindFunding(db, id) {
+  const record = findById(db, "campaign_in_kind_funding", id);
+  if (!record) throw new Error("تمويل الحملة العيني غير موجود.");
+  if (record.status === "posted") return record;
+  const campaign = findById(db, "campaigns", record.campaign_id);
+  if (!campaign || campaign.status !== "open") throw new Error("الحملة غير موجودة أو مغلقة.");
+  if (!(record.details || []).length) throw new Error("أضف صنفاً واحداً على الأقل للتمويل العيني.");
+  for (const detail of record.details) {
+    let remaining = Number(detail.quantity || 0);
+    const lots = (db.inventory_lots || []).filter(lot => lot.item_id === detail.item_id && lot.warehouse_id === record.warehouse_id && !lot.campaign_id && Number(lot.quantity_available || 0) > 0).sort((a,b) => String(a.expiry_date || "9999").localeCompare(String(b.expiry_date || "9999")));
+    const available = sum(lots, "quantity_available");
+    if (available < remaining) throw new Error(`الرصيد العام غير كافٍ للصنف ${relationName(db, "items", detail.item_id)}. المتاح ${available}.`);
+    for (const lot of lots) {
+      if (remaining <= 0) break;
+      const take = Math.min(remaining, Number(lot.quantity_available || 0));
+      lot.quantity_available -= take;
+      db.inventory_lots.push({ id: uid("lot"), item_id: detail.item_id, warehouse_id: record.warehouse_id, campaign_id: record.campaign_id, delegate_id: null, source_funding_id: record.id, source_lot_id: lot.id, lot_no: lot.lot_no || null, expiry_date: lot.expiry_date || null, quantity_received: take, quantity_damaged: 0, quantity_available: take, created_at: new Date().toISOString() });
+      remaining -= take;
+    }
   }
   record.status = "posted";
   record.posted_at = new Date().toISOString();
@@ -461,8 +533,46 @@ function demoCancel(db, table, id, reason = "إلغاء بواسطة المست�
   if (table === "cash_receipts" && record.status === "posted") {
     const linked = db.cash_payments.some(x => statusIsPosted(x) && x.cash_receipt_id === id);
     if (linked) throw new Error("لا يمكن إلغاء سند قبض مستخدم في الصرف.");
+    if (demoCashboxBalance(db, record.cashbox_id) < Number(record.amount || 0)) throw new Error("لا يمكن عكس سند القبض لأن الرصيد الحالي أقل من قيمته.");
+    addDemoLedger(db, { cashbox_id: record.cashbox_id, transaction_type: "refund", reference_table: "cash_receipts", reference_id: record.id, debit: Number(record.amount), currency: record.currency, description: `عكس سند قبض - ${record.voucher_no}` });
+  }
+  if (table === "campaign_funding" && record.status === "posted") {
+    const operational = sum((db.campaign_funding || []).filter(x => x.campaign_id === record.campaign_id && statusIsPosted(x)), "amount") - sum((db.cash_payments || []).filter(x => x.campaign_id === record.campaign_id && statusIsPosted(x)), "amount");
+    if (operational < Number(record.amount || 0)) throw new Error("لا يمكن الإلغاء لأن جزءاً من هذا التمويل صُرف بالفعل.");
+    const otherFunding = sum((db.campaign_funding || []).filter(x => x.id !== record.id && x.campaign_id === record.campaign_id && statusIsPosted(x)), "amount");
+    const committed = (db.campaign_distributors || []).filter(x => x.campaign_id === record.campaign_id).reduce((total, x) => total + Number(x.allocated_amount || 0) - Number(x.returned_amount || 0), 0);
+    if (otherFunding < committed) throw new Error("لا يمكن الإلغاء قبل تخفيض أو تسوية تخصيصات الموزعين.");
+    addDemoLedger(db, { cashbox_id: record.cashbox_id, transaction_type: "refund", reference_table: "campaign_funding", reference_id: record.id, credit: Number(record.amount), currency: record.currency, description: `عكس تمويل حملة - ${record.funding_no}` });
+  }
+  if (table === "cash_payments" && record.status === "posted") {
+    const assignment = (db.campaign_distributors || []).find(x => x.campaign_id === record.campaign_id && x.delegate_id === record.delegate_id);
+    if (assignment) {
+      assignment.spent_amount = Math.max(0, Number(assignment.spent_amount || 0) - Number(record.amount || 0));
+      if (assignment.status === "settled" && Number(assignment.allocated_amount || 0) - assignment.spent_amount - Number(assignment.returned_amount || 0) > 0) assignment.status = "active";
+    }
+  }
+  if (table === "cash_transfers" && record.status === "posted") {
+    if (demoCashboxBalance(db, record.to_cashbox_id) < Number(record.amount || 0)) throw new Error("لا يمكن عكس التحويل لأن رصيد الصندوق الهدف غير كافٍ.");
+    addDemoLedger(db, { cashbox_id: record.to_cashbox_id, transaction_type: "refund", reference_table: "cash_transfers", reference_id: record.id, debit: Number(record.amount), currency: record.currency, description: `عكس تحويل وارد - ${record.transfer_no}` });
+    addDemoLedger(db, { cashbox_id: record.from_cashbox_id, transaction_type: "refund", reference_table: "cash_transfers", reference_id: record.id, credit: Number(record.amount), currency: record.currency, description: `عكس تحويل صادر - ${record.transfer_no}` });
+  }
+  if (table === "campaign_in_kind_funding" && record.status === "posted") {
+    const targets = (db.inventory_lots || []).filter(lot => lot.source_funding_id === record.id);
+    for (const target of targets) {
+      if (Number(target.quantity_available || 0) < Number(target.quantity_received || 0)) throw new Error("لا يمكن إلغاء التمويل لأن جزءاً من مخزون الحملة صُرف.");
+    }
+    for (const target of targets) {
+      const source = findById(db, "inventory_lots", target.source_lot_id);
+      if (source) source.quantity_available = Number(source.quantity_available || 0) + Number(target.quantity_received || 0);
+      target.quantity_available = 0;
+    }
   }
   if (table === "in_kind_payments" && record.status === "posted") allocateInventory(db, record.details || [], record.campaign_id, record.delegate_id, true);
+  if (table === "cash_payments") {
+    (db.distribution_assignments || [])
+      .filter(item => item.payment_id === record.id)
+      .forEach(item => { item.delivery_status = "cancelled"; item.delivered_at = null; });
+  }
   record.status = "cancelled";
   record.cancellation_reason = reason;
   record.cancelled_at = new Date().toISOString();
@@ -475,6 +585,17 @@ async function executeQueuedOperation(item) {
   const details = payload.details;
   delete payload.details;
   if (idempotentTables.has(item.table)) payload.idempotency_key = payload.idempotency_key || item.idempotencyKey;
+
+  const atomicRpc = atomicDraftRpcMap[item.table];
+  if (atomicRpc && Array.isArray(details)) {
+    const { error } = await supabase.rpc(atomicRpc, {
+      p_record: payload,
+      p_details: details,
+      p_id: item.operation === "update" ? item.recordId : null
+    });
+    if (error) throw error;
+    return;
+  }
 
   if (item.operation === "create") {
     const { data: inserted, error } = await supabase.from(item.table).insert(payload).select("id").single();
@@ -532,6 +653,13 @@ export const dataService = {
       const profile = db.profiles.find(p => String(p.phone || "").replace(/[^0-9+]/g, "") === phone) || db.profiles[0];
       if (!profile?.is_active) throw new Error("تعذر تسجيل الدخول. راجع مدير النظام.");
       const session = { user: { id: profile.id, phone: profile.phone }, profile, demo: true, expiresAt: remember ? null : Date.now() + 8 * 3600000 };
+      db.user_sessions = db.user_sessions || [];
+      const tracked = { id: uid("us"), user_id: profile.id, user_name: profile.full_name, role_name: profile.role, device_name: getDeviceName(), branch_name: relationName(db, "branches", profile.branch_id), login_at: new Date().toISOString(), last_activity_at: new Date().toISOString(), status: "active" };
+      db.user_sessions.unshift(tracked);
+      localStorage.setItem(USER_SESSION_KEY, tracked.id);
+      db.login_attempts = db.login_attempts || [];
+      db.login_attempts.unshift({ id: uid("la"), attempted_at: new Date().toISOString(), phone, device_name: getDeviceName(), ip_address: "محلي", result: "success", lockout_until: null });
+      writeDemoDb(db);
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       return session;
     }
@@ -539,29 +667,43 @@ export const dataService = {
     const digits = phone.replace(/\D/g, "").replace(/^967/, "").replace(/^0+/, "");
     if (!/^7\d{8}$/.test(digits)) throw new Error("أدخل رقم هاتف يمني صحيحاً من 9 أرقام، مثل 777123456.");
     const email = `u${digits}@zakat.local`;
-    const fp = deviceFingerprint();
-    const dname = deviceName();
+    const fp = getDeviceFingerprint();
+    const dname = getDeviceName();
     const { data, error } = await supabase.auth.signInWithPassword({ email, password });
     if (error) {
-      try { await supabase.from("login_attempts").insert({ phone: digits, device_fingerprint: fp, device_name: dname, result: "failed" }); } catch {}
+      try { await supabase.rpc("record_login_attempt", { p_phone: digits, p_fingerprint: fp, p_device_name: dname, p_result: "failed" }); } catch {}
       throw new Error("رقم الهاتف أو كلمة المرور غير صحيحة.");
+    }
+    const { data: deviceRows, error: deviceError } = await supabase.rpc("request_device_authorization", { p_fingerprint: fp, p_device_name: dname, p_platform: navigator.platform || "Web" });
+    if (deviceError) { await supabase.auth.signOut(); throw new Error(`تعذر التحقق من ترخيص الجهاز: ${deviceError.message}`); }
+    const device = Array.isArray(deviceRows) ? deviceRows[0] : deviceRows;
+    if (device?.status !== "approved") {
+      try { await supabase.rpc("record_login_attempt", { p_phone: digits, p_fingerprint: fp, p_device_name: dname, p_result: device?.status === "blocked" ? "blocked" : "pending_device" }); } catch {}
+      await supabase.auth.signOut();
+      throw new Error(device?.status === "blocked" ? "هذا الجهاز محظور. راجع مدير النظام." : "تم تسجيل طلب الجهاز، لكنه لم يُعتمد بعد. اطلب من المدير الموافقة عليه.");
     }
     const profile = await getCurrentProfile(data.user.id);
     if (!profile?.is_active) { await supabase.auth.signOut(); throw new Error("تعذر تسجيل الدخول. راجع مدير النظام."); }
-    try {
-      await supabase.from("login_attempts").insert({ phone: digits, device_fingerprint: fp, device_name: dname, result: "success" });
-      const { data: device } = await supabase.from("authorized_devices").select("id,status").eq("fingerprint", fp).maybeSingle();
-      if (!device) await supabase.from("authorized_devices").insert({ user_id: data.user.id, device_name: dname, fingerprint: fp, platform: navigator.platform || "Web", status: "pending", last_seen_at: new Date().toISOString() });
-      else await supabase.from("authorized_devices").update({ user_id: data.user.id, device_name: dname, last_seen_at: new Date().toISOString() }).eq("id", device.id);
-    } catch {}
+    try { await supabase.rpc("record_login_attempt", { p_phone: digits, p_fingerprint: fp, p_device_name: dname, p_result: "success" }); } catch {}
+    const { data: openedSession } = await supabase.rpc("open_user_session", { p_fingerprint: fp, p_device_name: dname });
+    if (openedSession) localStorage.setItem(USER_SESSION_KEY, String(openedSession));
     const result = { ...data.session, profile };
-    localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: data.user.id }, profile, cachedAt: new Date().toISOString() }));
+    localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: data.user.id }, profile, deviceFingerprint: fp, cachedAt: new Date().toISOString() }));
     return result;
   },
 
   async signOut() {
-    if (!isSupabaseConfigured) localStorage.removeItem(SESSION_KEY);
-    else await supabase.auth.signOut();
+    const sessionId = localStorage.getItem(USER_SESSION_KEY);
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      const tracked = findById(db, "user_sessions", sessionId);
+      if (tracked) { tracked.status = "inactive"; tracked.last_activity_at = new Date().toISOString(); writeDemoDb(db); }
+      localStorage.removeItem(SESSION_KEY);
+    } else {
+      if (sessionId) { try { await supabase.rpc("close_user_session", { p_session_id: sessionId }); } catch {} }
+      await supabase.auth.signOut();
+    }
+    localStorage.removeItem(USER_SESSION_KEY);
   },
 
   async getSession() {
@@ -571,31 +713,68 @@ export const dataService = {
       return session;
     }
     if (!isOnline()) {
-      try { return JSON.parse(localStorage.getItem(OFFLINE_SESSION_KEY) || "null"); } catch { return null; }
+      try {
+        const cached = JSON.parse(localStorage.getItem(OFFLINE_SESSION_KEY) || "null");
+        return cached?.deviceFingerprint === getDeviceFingerprint() ? cached : null;
+      } catch { return null; }
     }
     try {
       const session = await getCurrentSession();
       if (!session) return null;
       const profile = await getCurrentProfile(session.user.id);
       const result = { ...session, profile };
-      localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: session.user.id }, profile, cachedAt: new Date().toISOString() }));
+      localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: session.user.id }, profile, deviceFingerprint: getDeviceFingerprint(), cachedAt: new Date().toISOString() }));
       return result;
     } catch {
-      try { return JSON.parse(localStorage.getItem(OFFLINE_SESSION_KEY) || "null"); } catch { return null; }
+      if (isOnline()) return null;
+      try {
+        const cached = JSON.parse(localStorage.getItem(OFFLINE_SESSION_KEY) || "null");
+        return cached?.deviceFingerprint === getDeviceFingerprint() ? cached : null;
+      } catch { return null; }
     }
   },
 
-  async list(table, options = {}) {
-    const { search = "", filters = {}, page = 1, pageSize = 500, orderBy = null, ascending = false } = options;
+  async touchSession() {
+    const sessionId = localStorage.getItem(USER_SESSION_KEY);
+    if (!sessionId) return false;
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
-      let rows = (db[table] || []).map(row => enrichDemoRow(db, table, row));
+      const tracked = findById(db, "user_sessions", sessionId);
+      if (!tracked || tracked.status !== "active") return false;
+      tracked.last_activity_at = new Date().toISOString();
+      writeDemoDb(db);
+      return true;
+    }
+    if (!isOnline()) return false;
+    const { error } = await supabase.rpc("touch_user_session", { p_session_id: sessionId });
+    if (error) throw error;
+    return true;
+  },
+
+  async list(table, options = {}) {
+    const { search = "", filters = {}, page = 1, pageSize = 500, orderBy = null, ascending = false, dateKey = null, dateFrom = "", dateTo = "" } = options;
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      const sourceRows = table === "stock_balances" ? buildDemoStockBalances(db) : (db[table] || []);
+      let rows = sourceRows.map(row => enrichDemoRow(db, table, row));
+      const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+      if (session?.profile?.role === "distributor") {
+        const linkedDelegate = (db.delegates || []).find(d => d.profile_id === session.profile.id && d.is_active !== false);
+        if (["beneficiaries", "cash_payments", "in_kind_payments", "distribution_assignments"].includes(table)) {
+          rows = linkedDelegate ? rows.filter(row => row.delegate_id === linkedDelegate.id) : [];
+        }
+      }
       Object.entries(filters || {}).forEach(([key, value]) => {
         if (value !== "" && value !== undefined && value !== null) rows = rows.filter(row => String(row[key]) === String(value));
       });
       if (search) {
         const q = search.toLowerCase();
         rows = rows.filter(row => JSON.stringify(row).toLowerCase().includes(q));
+      }
+      if (dateKey && dateFrom) rows = rows.filter(row => String(row[dateKey] || "") >= dateFrom);
+      if (dateKey && dateTo) {
+        const upperDate = dateKey.endsWith("_at") ? `${dateTo}T23:59:59.999` : dateTo;
+        rows = rows.filter(row => String(row[dateKey] || "") <= upperDate);
       }
       rows.sort((a, b) => {
         const av = a[orderBy] ?? "";
@@ -611,6 +790,8 @@ export const dataService = {
     Object.entries(filters || {}).forEach(([key, value]) => {
       if (value !== "" && value !== undefined && value !== null) query = query.eq(key, value);
     });
+    if (dateKey && dateFrom) query = query.gte(dateKey, dateFrom);
+    if (dateKey && dateTo) query = query.lte(dateKey, dateKey.endsWith("_at") ? `${dateTo}T23:59:59.999` : dateTo);
     if (search) query = query.or(`search_text.ilike.%${search.replaceAll(",", " ")}%`);
     if (orderBy) query = query.order(orderBy, { ascending, nullsFirst: false });
     const from = (page - 1) * pageSize;
@@ -653,20 +834,27 @@ export const dataService = {
   async create(table, payload) {
     const data = { ...payload };
     delete data.password;
-    const postableTables = ["cash_receipts", "cash_payments", "cash_transfers", "campaign_funding", "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments", "delegate_advances"];
+    const postableTables = ["cash_receipts", "cash_payments", "cash_transfers", "campaign_funding", "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments"];
     const settings = cachedRows("system_settings")[0] || {};
     const shouldAutoPost = postableTables.includes(table) && settings.auto_post_all_operations === true;
     // Always insert as a draft/open record first. Final posting must go through the
     // database RPC so balance, permissions and ledger checks are never bypassed.
-    if (postableTables.includes(table)) data.status = table === "delegate_advances" ? "open" : "draft";
+    if (postableTables.includes(table)) data.status = "draft";
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
-      validateDemoCreate(db, table, data);
-      if (table === "campaign_distributors") {
-        const funded = sum((db.campaign_funding || []).filter(x => x.campaign_id === data.campaign_id && x.status === "posted"), "amount");
-        const allocated = sum((db.campaign_distributors || []).filter(x => x.campaign_id === data.campaign_id), "allocated_amount");
-        if (allocated + Number(data.allocated_amount || 0) > funded) throw new Error("مبلغ العهدة يتجاوز الرصيد غير الموزع للحملة.");
+      const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
+      if (table === "cash_payments") {
+        const context = await this.getPaymentContext(data.beneficiary_id, data.campaign_id, data.delegate_id || null);
+        Object.assign(data, { delegate_id: context.delegate_id, cashbox_id: context.cashbox_id, currency: context.currency });
       }
+      if (table === "in_kind_payments") {
+        const beneficiary = findById(db, "beneficiaries", data.beneficiary_id);
+        if (!beneficiary || beneficiary.status !== "approved") throw new Error("المستفيد غير موجود أو غير معتمد.");
+        if (session?.profile?.role !== "admin" && data.delegate_id && data.delegate_id !== beneficiary.delegate_id) throw new Error("لا يستطيع تغيير موزع المستفيد إلا مدير النظام.");
+        data.delegate_id = session?.profile?.role === "admin" && data.delegate_id ? data.delegate_id : beneficiary.delegate_id;
+        if (data.override_reason && session?.profile?.role !== "admin") throw new Error("الاستثناء من منع التكرار متاح لمدير النظام فقط.");
+      }
+      validateDemoCreate(db, table, data);
       const row = generateIdentifiers(db, table, { id: uid(table.slice(0, 3)), ...data, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
       if (table === "account_closings") {
         const campaign = enrichDemoRow(db, "campaigns", findById(db, "campaigns", row.campaign_id));
@@ -685,7 +873,7 @@ export const dataService = {
     }
 
     if (table === "profiles") {
-      const { data: fnData, error } = await supabase.functions.invoke(config.edgeFunctions?.createUser || "create-user", { body: payload });
+      const { data: fnData, error } = await supabase.functions.invoke(config.edgeFunctions?.createUser || "create-user", { body: payload, headers: { "x-device-fingerprint": getDeviceFingerprint() } });
       if (error) throw error;
       return fnData;
     }
@@ -694,13 +882,27 @@ export const dataService = {
     delete data.details;
     if (idempotentTables.has(table)) data.idempotency_key = data.idempotency_key || crypto.randomUUID();
     try {
+      const atomicRpc = atomicDraftRpcMap[table];
+      if (atomicRpc && Array.isArray(details)) {
+        const { data: savedId, error } = await supabase.rpc(atomicRpc, {
+          p_record: data,
+          p_details: details,
+          p_id: null
+        });
+        if (error) throw error;
+        if (shouldAutoPost) return await this.action(table, savedId, "post");
+        return await this.get(table, savedId);
+      }
       const { data: inserted, error } = await supabase.from(table).insert(data).select().single();
       if (error) throw error;
       if (details?.length && childTableMap[table]) {
         const child = childTableMap[table];
         const rows = details.map(detail => ({ ...detail, [child.foreignKey]: inserted.id }));
         const { error: childError } = await supabase.from(child.table).insert(rows);
-        if (childError) throw childError;
+        if (childError) {
+          await supabase.from(table).delete().eq("id", inserted.id);
+          throw new Error(`فشل حفظ تفاصيل السجل وتم التراجع عن السجل الرئيسي: ${childError.message}`);
+        }
       }
       if (shouldAutoPost) return await this.action(table, inserted.id, "post");
       return inserted;
@@ -736,6 +938,16 @@ export const dataService = {
         if (settingsError) throw settingsError;
         cacheRows("system_settings", [updatedSettings]);
         return updatedSettings;
+      }
+      const atomicRpc = atomicDraftRpcMap[table];
+      if (atomicRpc && Array.isArray(details)) {
+        const { data: savedId, error } = await supabase.rpc(atomicRpc, {
+          p_record: data,
+          p_details: details,
+          p_id: id
+        });
+        if (error) throw error;
+        return await this.get(table, savedId);
       }
       const { data: updated, error } = await supabase.from(table).update(data).eq("id", id).select().single();
       if (error) throw error;
@@ -776,11 +988,17 @@ export const dataService = {
         else if (table === "cash_transfers") result = demoPostCashTransfer(db, id);
         else if (table === "cash_payments") result = demoPostCashPayment(db, id);
         else if (table === "in_kind_receipts") result = demoPostInKindReceipt(db, id);
-        else if (table === "campaign_in_kind_funding") { record.status = "posted"; record.posted_at = new Date().toISOString(); result = record; }
+        else if (table === "campaign_in_kind_funding") result = demoPostCampaignInKindFunding(db, id);
         else if (table === "in_kind_payments") result = demoPostInKindPayment(db, id);
       } else if (action === "cancel") result = demoCancel(db, table, id, extra.reason);
       else if (action === "approve") record.status = "approved";
       else if (action === "confirm-receipt") record.receipt_status = "received";
+      else if (action === "settle" && table === "campaign_distributors") {
+        const remaining = Number(record.allocated_amount || 0) - Number(record.spent_amount || 0) - Number(record.returned_amount || 0);
+        if (remaining < 0) throw new Error("بيانات التخصيص غير متوازنة.");
+        record.returned_amount = Number(record.returned_amount || 0) + remaining;
+        record.status = "settled";
+      }
       else if (action === "toggle") record.is_active = !record.is_active;
       else if (action === "open-close") record.status = record.status === "open" ? "closed" : "open";
       else if (action === "reopen") {
@@ -802,11 +1020,16 @@ export const dataService = {
       "in_kind_receipts:post": "post_in_kind_receipt",
       "campaign_in_kind_funding:post": "post_campaign_in_kind_funding",
       "in_kind_payments:post": "post_in_kind_payment",
-      "delegate_advances:post": "post_delegate_advance",
       "cash_receipts:cancel": "cancel_cash_receipt",
+      "campaign_funding:cancel": "cancel_campaign_funding",
+      "cash_transfers:cancel": "cancel_cash_transfer",
       "cash_payments:cancel": "cancel_cash_payment",
       "in_kind_receipts:cancel": "cancel_in_kind_receipt",
+      "campaign_in_kind_funding:cancel": "cancel_campaign_in_kind_funding",
       "in_kind_payments:cancel": "cancel_in_kind_payment",
+      "cash_payments:confirm-receipt": "confirm_cash_payment_receipt",
+      "in_kind_payments:confirm-receipt": "confirm_in_kind_payment_receipt",
+      "campaign_distributors:settle": "settle_campaign_distributor",
       "account_closings:reopen": "reopen_account_closing"
     };
     const rpc = rpcMap[`${table}:${action}`];
@@ -815,8 +1038,7 @@ export const dataService = {
         post_cash_receipt: "p_id",
         post_campaign_funding: "p_funding_id",
         post_campaign_in_kind_funding: "p_id",
-        post_cash_transfer: "p_transfer_id",
-        post_delegate_advance: "p_id"
+        post_cash_transfer: "p_transfer_id"
       };
       const args = { [argNames[rpc] || "p_id"]: id };
       if (extra.reason) args.p_reason = extra.reason;
@@ -837,74 +1059,114 @@ export const dataService = {
   },
 
 
-  async quickDelivery(payload) {
-    if (!payload?.beneficiary_id) throw new Error("يجب اختيار مستفيد مسجل مسبقاً في دليل المستفيدين.");
-    if (!(Number(payload.amount) > 0)) throw new Error("المبلغ غير صحيح.");
-
+  async getPaymentContext(beneficiaryId, campaignId = null, requestedDelegateId = null) {
+    if (!beneficiaryId) throw new Error("اختر مستفيداً معتمداً.");
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
-      const role = session?.profile?.role || "";
-      const beneficiary = (db.beneficiaries || []).find(b => String(b.id) === String(payload.beneficiary_id) && b.status === "approved");
-      if (!beneficiary) throw new Error("المستفيد غير موجود في الدليل أو غير معتمد.");
+      const role = session?.profile?.role || "data_entry";
+      if (!["admin", "supervisor", "accountant", "distributor"].includes(role)) throw new Error("غير مصرح بالصرف النقدي.");
+      const beneficiary = findById(db, "beneficiaries", beneficiaryId);
+      if (!beneficiary || beneficiary.status !== "approved") throw new Error("المستفيد غير موجود أو غير معتمد.");
+      if (role !== "admin" && requestedDelegateId && requestedDelegateId !== beneficiary.delegate_id) throw new Error("لا يستطيع تغيير موزع المستفيد إلا مدير النظام.");
+      const effectiveDelegateId = role === "admin" && requestedDelegateId ? requestedDelegateId : beneficiary.delegate_id;
+      const delegate = findById(db, "delegates", effectiveDelegateId);
+      if (!delegate || delegate.is_active === false) throw new Error("المستفيد غير مربوط بموزع نشط.");
+      if (role === "distributor" && delegate.profile_id !== session.profile.id) throw new Error("المستفيد غير مرتبط بحساب الموزع الحالي.");
+      const assignments = (db.campaign_distributors || [])
+        .filter(x => x.delegate_id === delegate.id && x.status === "active" && (!campaignId || x.campaign_id === campaignId))
+        .map(x => ({ assignment: x, campaign: findById(db, "campaigns", x.campaign_id), cashbox: findById(db, "cashboxes", x.cashbox_id) }))
+        .filter(x => x.campaign?.status === "open" && ["cash", "mixed"].includes(x.campaign?.campaign_type) && x.cashbox?.is_active !== false && x.cashbox?.currency === x.campaign?.currency)
+        .map(x => {
+          const allocationRemaining = Number(x.assignment.allocated_amount || 0) - Number(x.assignment.spent_amount || 0) - Number(x.assignment.returned_amount || 0);
+          const campaignFunded = sum((db.campaign_funding || []).filter(f => f.campaign_id === x.campaign.id && f.status === "posted"), "amount");
+          const campaignSpent = sum((db.cash_payments || []).filter(p => p.campaign_id === x.campaign.id && p.status === "posted"), "amount");
+          return { ...x, available: Math.max(0, Math.min(allocationRemaining, campaignFunded - campaignSpent)) };
+        })
+        .filter(x => x.available > 0);
+      if (!assignments.length) throw new Error("لا يوجد تخصيص حملة نشط للموزع المسؤول عن هذا المستفيد.");
+      const selected = assignments.sort((a,b) => String(b.assignment.assigned_at || "").localeCompare(String(a.assignment.assigned_at || "")))[0];
+      return { beneficiary_id: beneficiary.id, delegate_id: delegate.id, delegate_name: delegate.full_name, campaign_id: selected.campaign.id, campaign_name: selected.campaign.name, cashbox_id: selected.cashbox.id, cashbox_name: selected.cashbox.name, currency: selected.cashbox.currency, available_amount: selected.available, assignment_id: selected.assignment.id };
+    }
+    const { data, error } = await supabase.rpc("get_cash_payment_context", {
+      p_beneficiary_id: beneficiaryId,
+      p_campaign_id: campaignId || null,
+      p_delegate_id: requestedDelegateId || null
+    });
+    if (error) throw error;
+    const row = Array.isArray(data) ? data[0] : data;
+    if (!row) throw new Error("لا يوجد تخصيص صالح لهذا المستفيد.");
+    return row;
+  },
 
-      let delegate = null;
-      if (role === "distributor") {
-        delegate = (db.delegates || []).find(d => d.profile_id === session?.profile?.id || d.id === session?.profile?.delegate_id);
-        if (!delegate) throw new Error("لا يوجد موزع مرتبط بالحساب الحالي.");
-        if (beneficiary.delegate_id !== delegate.id) throw new Error("المستفيد غير مرتبط بهذا الموزع.");
-      } else if (["admin", "supervisor", "accountant"].includes(role)) {
-        delegate = (db.delegates || []).find(d => d.id === beneficiary.delegate_id && d.is_active !== false);
-        if (!delegate) throw new Error("المستفيد غير مربوط بموزع نشط.");
-      } else {
-        throw new Error("غير مصرح بالتسليم السريع.");
-      }
+  async getQuickDeliveryContext(beneficiaryId, requestedDelegateId = null) {
+    return this.getPaymentContext(beneficiaryId, null, requestedDelegateId);
+  },
 
-      const advance = (db.delegate_advances || [])
-        .filter(a => a.delegate_id === delegate.id && ["open", "posted", "active"].includes(a.status))
-        .sort((a,b) => String(b.advance_date || b.created_at || "").localeCompare(String(a.advance_date || a.created_at || "")))[0];
-      if (!advance) throw new Error("لا توجد عهدة نقدية نشطة للموزع.");
-
-      const delegatePayments = sum((db.cash_payments || []).filter(x => x.status === "posted" && x.delegate_id === delegate.id), "amount");
-      const totalAdvances = sum((db.delegate_advances || []).filter(a => a.delegate_id === delegate.id && ["open", "posted", "active"].includes(a.status)), "amount");
-      const delegateBalance = totalAdvances - delegatePayments;
-      if (delegateBalance <= 0 || Number(payload.amount) > delegateBalance) throw new Error("رصيد الموزع صفر أو أقل من المبلغ المحدد.");
-
-      const cashbox = (db.cashboxes || []).find(c => c.id === advance.cashbox_id && c.is_active !== false);
-      if (!cashbox) throw new Error("صندوق عهدة الموزع غير موجود أو موقوف.");
-      const ledgerBalance = Number(cashbox.opening_balance || 0) + sum((db.cashbox_ledger || []).filter(l => l.cashbox_id === cashbox.id), "credit") - sum((db.cashbox_ledger || []).filter(l => l.cashbox_id === cashbox.id), "debit");
-      if (ledgerBalance <= 0 || Number(payload.amount) > ledgerBalance) throw new Error("رصيد الصندوق صفر أو أقل من المبلغ المحدد.");
-
-      const campaign = (db.campaigns || []).find(c => c.status === "open");
-      if (!campaign) throw new Error("لا توجد حملة مفتوحة للتسليم السريع.");
-
-      const row = {
-        id: uid("cp"), voucher_no: nextNumber(db.cash_payments || [], "CP"), payment_date: new Date().toISOString().slice(0,10),
-        delegate_id: delegate.id, beneficiary_id: beneficiary.id, campaign_id: campaign.id, cashbox_id: cashbox.id,
-        amount: Number(payload.amount), currency: cashbox.currency || "YER", delivery_method: "cash", receipt_status: "received",
-        actual_recipient: beneficiary.full_name, status: "posted", posted_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString()
-      };
+  async quickDelivery(payload) {
+    if (!payload?.beneficiary_id || !(Number(payload.amount) > 0)) throw new Error("اختر مستفيداً وأدخل مبلغاً صحيحاً.");
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      const context = await this.getPaymentContext(payload.beneficiary_id, payload.campaign_id || null, payload.delegate_id || null);
+      if (Number(payload.amount) > Number(context.available_amount)) throw new Error(`المبلغ يتجاوز المتاح ${context.available_amount}.`);
+      const duplicate = (db.cash_payments || []).find(x => x.status === "posted" && x.beneficiary_id === payload.beneficiary_id && x.campaign_id === context.campaign_id);
+      if (duplicate) throw new Error("المستفيد استلم سابقاً من هذه الحملة.");
+      const beneficiary = findById(db, "beneficiaries", payload.beneficiary_id);
+      const row = { id: uid("cp"), voucher_no: nextNumber(db.cash_payments || [], "CP"), payment_date: new Date().toISOString().slice(0,10), delegate_id: context.delegate_id, beneficiary_id: beneficiary.id, campaign_id: context.campaign_id, cashbox_id: context.cashbox_id, amount: Number(payload.amount), currency: context.currency, delivery_method: "cash", receipt_status: "received", actual_recipient: beneficiary.full_name, status: "posted", posted_at: new Date().toISOString(), created_at: new Date().toISOString(), updated_at: new Date().toISOString(), notes: "تسليم سريع" };
       db.cash_payments.unshift(row);
-      db.cashbox_ledger = db.cashbox_ledger || [];
-      db.cashbox_ledger.unshift({ id: uid("led"), cashbox_id: cashbox.id, transaction_type: "payment", reference_table: "cash_payments", reference_id: row.id, debit: row.amount, credit: 0, currency: row.currency, description: `تسليم سريع - ${beneficiary.full_name}`, transaction_at: new Date().toISOString(), created_at: new Date().toISOString() });
+      const assignment = findById(db, "campaign_distributors", context.assignment_id);
+      assignment.spent_amount = Number(assignment.spent_amount || 0) + row.amount;
+      if (Number(assignment.allocated_amount || 0) - Number(assignment.spent_amount || 0) - Number(assignment.returned_amount || 0) <= 0) assignment.status = "settled";
       db.distribution_assignments = db.distribution_assignments || [];
-      db.distribution_assignments.unshift({ id: uid("das"), beneficiary_id: beneficiary.id, delegate_id: delegate.id, campaign_id: campaign.id, amount: row.amount, delivery_status: "received", delivered_at: new Date().toISOString(), payment_id: row.id });
+      db.distribution_assignments.unshift({ id: uid("das"), beneficiary_id: beneficiary.id, delegate_id: context.delegate_id, campaign_id: context.campaign_id, amount: row.amount, delivery_status: "received", delivered_at: new Date().toISOString(), payment_id: row.id });
+      auditDemo(db, "تسليم سريع نقدي", "cash_payments", row.id, null, row);
       writeDemoDb(db);
       return row;
     }
-
     const { data, error } = await supabase.rpc("quick_deliver_cash", {
-      p_beneficiary_name: payload.beneficiary_name,
+      p_beneficiary_id: payload.beneficiary_id,
       p_amount: Number(payload.amount),
-      p_beneficiary_id: payload.beneficiary_id
+      p_campaign_id: payload.campaign_id,
+      p_cashbox_id: payload.cashbox_id,
+      p_delegate_id: payload.delegate_id || null
     });
     if (error) throw error;
     return data;
   },
 
+  async bulkImport(table, rows, fileName = "import.xlsx") {
+    if (!Array.isArray(rows) || !rows.length) throw new Error("لا توجد صفوف صالحة للاستيراد.");
+    if (rows.length > 2000) throw new Error("الحد الأقصى للعملية الواحدة 2000 صف.");
+    let success = 0;
+    const errors = [];
+    for (let index = 0; index < rows.length; index++) {
+      try { await this.create(table, rows[index]); success += 1; }
+      catch (error) { errors.push({ row: index + 2, message: error.message || "خطأ غير معروف" }); }
+    }
+    const job = { target_table: table, target_name: table, file_name: fileName, total_rows: rows.length, success_rows: success, error_rows: errors.length, errors, status: errors.length ? "partial" : "completed", created_at: new Date().toISOString() };
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      db.import_jobs = db.import_jobs || [];
+      db.import_jobs.unshift({ id: uid("imp"), ...job });
+      auditDemo(db, "استيراد Excel", table, null, null, { file_name: fileName, success, failed: errors.length });
+      writeDemoDb(db);
+    } else {
+      const { error } = await supabase.from("import_jobs").insert({ target_table: table, file_name: fileName, total_rows: rows.length, success_rows: success, error_rows: errors.length, errors, status: job.status });
+      if (error) console.warn("تعذر حفظ سجل الاستيراد", error);
+    }
+    return { success, failed: errors.length, errors };
+  },
+
+  async restoreBackup(tables) {
+    if (isSupabaseConfigured) throw new Error("الاستعادة من الواجهة غير متاحة لقاعدة Supabase الحية.");
+    if (!tables || typeof tables !== "object" || !Array.isArray(tables.profiles) || !Array.isArray(tables.system_settings)) throw new Error("النسخة لا تحتوي الجداول الأساسية المطلوبة.");
+    writeDemoDb(clone(tables));
+    return true;
+  },
+
   async exportAllTables() {
     if (!isSupabaseConfigured) return clone(ensureDemoDb());
-    const tables = ["profiles","branches","delegates","donors","beneficiary_categories","health_conditions","beneficiaries","campaigns","campaign_funding","campaign_distributors","campaign_in_kind_funding","campaign_in_kind_funding_details","cashboxes","cashbox_users","cashbox_ledger","cash_receipts","cash_payments","cash_transfers","delegate_advances","distribution_assignments","units","items","warehouses","inventory_lots","in_kind_receipts","in_kind_receipt_details","baskets","basket_items","in_kind_payments","in_kind_payment_details","account_closings","audit_logs","system_settings"];
+    const tables = ["profiles","branches","delegates","donors","beneficiary_categories","health_conditions","beneficiaries","campaigns","campaign_funding","campaign_distributors","campaign_in_kind_funding","campaign_in_kind_funding_details","cashboxes","cashbox_users","cashbox_ledger","cash_receipts","cash_payments","cash_transfers","distribution_assignments","units","items","warehouses","inventory_lots","inventory_movements","in_kind_receipts","in_kind_receipt_details","baskets","basket_items","in_kind_payments","in_kind_payment_details","authorized_devices","login_attempts","user_sessions","user_archives","import_jobs","account_closings","audit_logs","system_settings"];
     const out = {};
     for (const table of tables) { const { data, error } = await supabase.from(table).select("*").limit(100000); if (error) throw new Error(`تعذر تصدير جدول ${table}: ${error.message}`); out[table] = data || []; }
     return out;
@@ -934,7 +1196,7 @@ export const dataService = {
 
   async resetUserPassword(id, password) {
     if (!isSupabaseConfigured) return { ok: true };
-    const { data, error } = await supabase.functions.invoke(config.edgeFunctions?.resetUserPassword || "reset-user-password", { body: { user_id: id, password } });
+    const { data, error } = await supabase.functions.invoke(config.edgeFunctions?.resetUserPassword || "reset-user-password", { body: { user_id: id, password }, headers: { "x-device-fingerprint": getDeviceFingerprint() } });
     if (error) throw error;
     return data;
   },

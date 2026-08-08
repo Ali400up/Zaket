@@ -50,17 +50,17 @@ export const demoData = {
     { id: "c-4", name: "الحقيبة المدرسية", description: "حقائب وقرطاسية للطلاب", campaign_type: "in_kind", start_date: dateOnly(45), end_date: dateOnly(90), planned_budget: 0, ceiling: 0, currency: "YER", responsible_id: "u-supervisor", status: "setup", created_at: iso(-3) }
   ],
   cash_receipts: [
-    { id: "cr-1", voucher_no: "CR-2026-0001", receipt_date: dateOnly(-35), donor_id: "don-1", campaign_id: "c-1", delegate_id: "d-1", amount: 500000, currency: "YER", method: "cash", reference_no: null, notes: "تبرع رمضان", status: "posted", posted_at: iso(-35), created_by: "u-accountant", created_at: iso(-35) },
-    { id: "cr-2", voucher_no: "CR-2026-0002", receipt_date: dateOnly(-28), donor_id: "don-2", campaign_id: "c-1", delegate_id: "d-1", amount: 2200000, currency: "YER", method: "bank", reference_no: "BNK-88210", notes: "دفعة أولى", status: "posted", posted_at: iso(-28), created_by: "u-accountant", created_at: iso(-28) },
-    { id: "cr-3", voucher_no: "CR-2026-0003", receipt_date: dateOnly(-10), donor_id: "don-3", campaign_id: "c-3", delegate_id: "d-2", amount: 750000, currency: "YER", method: "exchange", reference_no: "EX-77192", notes: "فاعل خير", status: "posted", posted_at: iso(-10), created_by: "u-accountant", created_at: iso(-10) },
-    { id: "cr-4", voucher_no: "CR-2026-0004", receipt_date: dateOnly(-2), donor_id: "don-1", campaign_id: "c-1", delegate_id: "d-1", amount: 300000, currency: "YER", method: "cash", reference_no: null, notes: "بانتظار المراجعة", status: "under_review", posted_at: null, created_by: "u-accountant", created_at: iso(-2) },
-    { id: "cr-5", voucher_no: "CR-2026-0005", receipt_date: dateOnly(0), donor_id: "don-2", campaign_id: "c-3", delegate_id: "d-2", amount: 1000000, currency: "YER", method: "bank", reference_no: "BNK-99440", notes: "مسودة", status: "draft", posted_at: null, created_by: "u-accountant", created_at: iso(0) }
+    { id: "cr-1", voucher_no: "CR-2026-0001", receipt_date: dateOnly(-35), cashbox_id: "cb-1", donor_id: "don-1", campaign_id: null, delegate_id: null, amount: 500000, currency: "YER", method: "cash", reference_no: null, notes: "تبرع رمضان", status: "posted", posted_at: iso(-35), created_by: "u-accountant", created_at: iso(-35) },
+    { id: "cr-2", voucher_no: "CR-2026-0002", receipt_date: dateOnly(-28), cashbox_id: "cb-1", donor_id: "don-2", campaign_id: null, delegate_id: null, amount: 2200000, currency: "YER", method: "bank", reference_no: "BNK-88210", notes: "دفعة أولى", status: "posted", posted_at: iso(-28), created_by: "u-accountant", created_at: iso(-28) },
+    { id: "cr-3", voucher_no: "CR-2026-0003", receipt_date: dateOnly(-10), cashbox_id: "cb-2", donor_id: "don-3", campaign_id: null, delegate_id: null, amount: 750000, currency: "YER", method: "exchange", reference_no: "EX-77192", notes: "فاعل خير", status: "posted", posted_at: iso(-10), created_by: "u-accountant", created_at: iso(-10) },
+    { id: "cr-4", voucher_no: "CR-2026-0004", receipt_date: dateOnly(-2), cashbox_id: "cb-1", donor_id: "don-1", campaign_id: null, delegate_id: null, amount: 300000, currency: "YER", method: "cash", reference_no: null, notes: "بانتظار المراجعة", status: "under_review", posted_at: null, created_by: "u-accountant", created_at: iso(-2) },
+    { id: "cr-5", voucher_no: "CR-2026-0005", receipt_date: dateOnly(0), cashbox_id: "cb-2", donor_id: "don-2", campaign_id: null, delegate_id: null, amount: 1000000, currency: "YER", method: "bank", reference_no: "BNK-99440", notes: "مسودة", status: "draft", posted_at: null, created_by: "u-accountant", created_at: iso(0) }
   ],
   cash_payments: [
-    { id: "cp-1", voucher_no: "CP-2026-0001", payment_date: dateOnly(-30), delegate_id: "d-1", beneficiary_id: "b-1", campaign_id: "c-1", cash_receipt_id: "cr-1", amount: 120000, currency: "YER", delivery_method: "cash", receipt_status: "received", actual_recipient: "محمد صالح علي", transfer_no: null, status: "posted", posted_at: iso(-30), notes: "مساعدة علاجية", created_by: "u-distributor", created_at: iso(-30) },
-    { id: "cp-2", voucher_no: "CP-2026-0002", payment_date: dateOnly(-24), delegate_id: "d-1", beneficiary_id: "b-2", campaign_id: "c-1", cash_receipt_id: "cr-2", amount: 180000, currency: "YER", delivery_method: "transfer", receipt_status: "received", actual_recipient: "أمينة أحمد حسن", transfer_no: "TR-10022", status: "posted", posted_at: iso(-24), notes: "دعم أسرة", created_by: "u-distributor", created_at: iso(-24) },
-    { id: "cp-3", voucher_no: "CP-2026-0003", payment_date: dateOnly(-7), delegate_id: "d-2", beneficiary_id: "b-3", campaign_id: "c-3", cash_receipt_id: "cr-3", amount: 90000, currency: "YER", delivery_method: "cash", receipt_status: "pending", actual_recipient: "ولي الأمر", transfer_no: null, status: "posted", posted_at: iso(-7), notes: "دفعة كفالة", created_by: "u-accountant", created_at: iso(-7) },
-    { id: "cp-4", voucher_no: "CP-2026-0004", payment_date: dateOnly(-1), delegate_id: "d-1", beneficiary_id: "b-3", campaign_id: "c-1", cash_receipt_id: "cr-2", amount: 100000, currency: "YER", delivery_method: "cash", receipt_status: "pending", actual_recipient: null, transfer_no: null, status: "under_review", posted_at: null, notes: "تحت المراجعة", created_by: "u-distributor", created_at: iso(-1) }
+    { id: "cp-1", voucher_no: "CP-2026-0001", payment_date: dateOnly(-30), delegate_id: "d-1", beneficiary_id: "b-1", campaign_id: "c-1", cashbox_id: "cb-1", cash_receipt_id: null, amount: 120000, currency: "YER", delivery_method: "cash", receipt_status: "received", actual_recipient: "محمد صالح علي", transfer_no: null, status: "posted", posted_at: iso(-30), notes: "مساعدة علاجية", created_by: "u-distributor", created_at: iso(-30) },
+    { id: "cp-2", voucher_no: "CP-2026-0002", payment_date: dateOnly(-24), delegate_id: "d-3", beneficiary_id: "b-2", campaign_id: "c-1", cashbox_id: "cb-1", cash_receipt_id: null, amount: 180000, currency: "YER", delivery_method: "transfer", receipt_status: "received", actual_recipient: "أمينة أحمد حسن", transfer_no: "TR-10022", status: "posted", posted_at: iso(-24), notes: "دعم أسرة", created_by: "u-supervisor", created_at: iso(-24) },
+    { id: "cp-3", voucher_no: "CP-2026-0003", payment_date: dateOnly(-7), delegate_id: "d-1", beneficiary_id: "b-3", campaign_id: "c-3", cashbox_id: "cb-2", cash_receipt_id: null, amount: 90000, currency: "YER", delivery_method: "cash", receipt_status: "pending", actual_recipient: "ولي الأمر", transfer_no: null, status: "posted", posted_at: iso(-7), notes: "دفعة كفالة", created_by: "u-accountant", created_at: iso(-7) },
+    { id: "cp-4", voucher_no: "CP-2026-0004", payment_date: dateOnly(-1), delegate_id: "d-1", beneficiary_id: "b-3", campaign_id: "c-1", cashbox_id: "cb-1", cash_receipt_id: null, amount: 100000, currency: "YER", delivery_method: "cash", receipt_status: "pending", actual_recipient: null, transfer_no: null, status: "under_review", posted_at: null, notes: "تحت المراجعة", created_by: "u-distributor", created_at: iso(-1) }
   ],
   items: [
     { id: "i-1", name: "أرز بسمتي", category: "مواد غذائية", unit: "كيس", weight_volume: "10 كجم", min_stock: 30, is_active: true, notes: "الصنف الأساسي", created_at: iso(-180) },
@@ -71,22 +71,30 @@ export const demoData = {
     { id: "i-6", name: "حقيبة مدرسية", category: "تعليم", unit: "قطعة", weight_volume: null, min_stock: 50, is_active: true, notes: null, created_at: iso(-20) }
   ],
   inventory_lots: [
-    { id: "lot-1", item_id: "i-1", campaign_id: "c-1", delegate_id: "d-1", lot_no: "RICE-01", expiry_date: dateOnly(220), quantity_received: 160, quantity_damaged: 5, quantity_available: 125, created_at: iso(-32) },
-    { id: "lot-2", item_id: "i-2", campaign_id: "c-1", delegate_id: "d-1", lot_no: "FLOUR-01", expiry_date: dateOnly(150), quantity_received: 150, quantity_damaged: 2, quantity_available: 118, created_at: iso(-32) },
-    { id: "lot-3", item_id: "i-3", campaign_id: "c-1", delegate_id: "d-1", lot_no: "OIL-01", expiry_date: dateOnly(300), quantity_received: 80, quantity_damaged: 0, quantity_available: 17, created_at: iso(-25) },
-    { id: "lot-4", item_id: "i-4", campaign_id: "c-1", delegate_id: "d-1", lot_no: "SUGAR-01", expiry_date: dateOnly(270), quantity_received: 110, quantity_damaged: 3, quantity_available: 87, created_at: iso(-25) },
-    { id: "lot-5", item_id: "i-5", campaign_id: "c-2", delegate_id: "d-3", lot_no: "BLANKET-01", expiry_date: null, quantity_received: 200, quantity_damaged: 4, quantity_available: 6, created_at: iso(-100) }
+    { id: "lot-g1", item_id: "i-1", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, lot_no: "RICE-01", expiry_date: dateOnly(220), quantity_received: 160, quantity_damaged: 5, quantity_available: 125, created_at: iso(-32) },
+    { id: "lot-g2", item_id: "i-2", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, lot_no: "FLOUR-01", expiry_date: dateOnly(150), quantity_received: 150, quantity_damaged: 2, quantity_available: 123, created_at: iso(-32) },
+    { id: "lot-g3", item_id: "i-3", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, lot_no: "OIL-01", expiry_date: dateOnly(300), quantity_received: 80, quantity_damaged: 0, quantity_available: 60, created_at: iso(-25) },
+    { id: "lot-g4", item_id: "i-4", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, lot_no: "SUGAR-01", expiry_date: dateOnly(270), quantity_received: 110, quantity_damaged: 3, quantity_available: 82, created_at: iso(-25) },
+    { id: "lot-c1-1", item_id: "i-1", warehouse_id: "wh-1", campaign_id: "c-1", delegate_id: null, source_funding_id: "cikf-1", source_lot_id: "lot-g1", lot_no: "RICE-01", expiry_date: dateOnly(220), quantity_received: 30, quantity_damaged: 0, quantity_available: 27, created_at: iso(-8) },
+    { id: "lot-c1-2", item_id: "i-2", warehouse_id: "wh-1", campaign_id: "c-1", delegate_id: null, source_funding_id: "cikf-1", source_lot_id: "lot-g2", lot_no: "FLOUR-01", expiry_date: dateOnly(150), quantity_received: 25, quantity_damaged: 0, quantity_available: 22, created_at: iso(-8) },
+    { id: "lot-c1-3", item_id: "i-3", warehouse_id: "wh-1", campaign_id: "c-1", delegate_id: null, source_funding_id: "cikf-1", source_lot_id: "lot-g3", lot_no: "OIL-01", expiry_date: dateOnly(300), quantity_received: 20, quantity_damaged: 0, quantity_available: 18, created_at: iso(-8) },
+    { id: "lot-c1-4", item_id: "i-4", warehouse_id: "wh-1", campaign_id: "c-1", delegate_id: null, source_funding_id: "cikf-1", source_lot_id: "lot-g4", lot_no: "SUGAR-01", expiry_date: dateOnly(270), quantity_received: 25, quantity_damaged: 0, quantity_available: 22, created_at: iso(-8) }
+  ],
+  campaign_in_kind_funding: [
+    { id: "cikf-1", funding_no: "CIKF-2026-0001", funding_date: dateOnly(-8), campaign_id: "c-1", warehouse_id: "wh-1", status: "posted", posted_at: iso(-8), notes: "تمويل مخزون حملة رمضان", created_at: iso(-8), details: [
+      { item_id: "i-1", quantity: 30 }, { item_id: "i-2", quantity: 25 }, { item_id: "i-3", quantity: 20 }, { item_id: "i-4", quantity: 25 }
+    ]}
   ],
   in_kind_receipts: [
-    { id: "ikr-1", voucher_no: "IKR-2026-0001", receipt_date: dateOnly(-32), donor_id: "don-4", campaign_id: "c-1", delegate_id: "d-1", status: "posted", notes: "مواد سلة رمضان", posted_at: iso(-32), created_by: "u-warehouse", created_at: iso(-32), details: [
+    { id: "ikr-1", voucher_no: "IKR-2026-0001", receipt_date: dateOnly(-32), donor_id: "don-4", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, status: "posted", notes: "مواد سلة رمضان إلى المخزن العام", posted_at: iso(-32), created_by: "u-warehouse", created_at: iso(-32), details: [
       { item_id: "i-1", quantity: 160, valid_qty: 155, damaged_qty: 5, lot_no: "RICE-01", expiry_date: dateOnly(220) },
       { item_id: "i-2", quantity: 150, valid_qty: 148, damaged_qty: 2, lot_no: "FLOUR-01", expiry_date: dateOnly(150) }
     ]},
-    { id: "ikr-2", voucher_no: "IKR-2026-0002", receipt_date: dateOnly(-25), donor_id: "don-2", campaign_id: "c-1", delegate_id: "d-1", status: "posted", notes: "زيت وسكر", posted_at: iso(-25), created_by: "u-warehouse", created_at: iso(-25), details: [
+    { id: "ikr-2", voucher_no: "IKR-2026-0002", receipt_date: dateOnly(-25), donor_id: "don-2", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, status: "posted", notes: "زيت وسكر إلى المخزن العام", posted_at: iso(-25), created_by: "u-warehouse", created_at: iso(-25), details: [
       { item_id: "i-3", quantity: 80, valid_qty: 80, damaged_qty: 0, lot_no: "OIL-01", expiry_date: dateOnly(300) },
       { item_id: "i-4", quantity: 110, valid_qty: 107, damaged_qty: 3, lot_no: "SUGAR-01", expiry_date: dateOnly(270) }
     ]},
-    { id: "ikr-3", voucher_no: "IKR-2026-0003", receipt_date: dateOnly(0), donor_id: "don-4", campaign_id: "c-1", delegate_id: "d-3", status: "draft", notes: "مسودة مواد جديدة", posted_at: null, created_by: "u-warehouse", created_at: iso(0), details: [
+    { id: "ikr-3", voucher_no: "IKR-2026-0003", receipt_date: dateOnly(0), donor_id: "don-4", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, status: "draft", notes: "مسودة مواد جديدة", posted_at: null, created_by: "u-warehouse", created_at: iso(0), details: [
       { item_id: "i-1", quantity: 30, valid_qty: 30, damaged_qty: 0, lot_no: "RICE-02", expiry_date: dateOnly(250) }
     ]}
   ],
@@ -149,22 +157,27 @@ export const demoData = {
     {id:"ua-2",created_at:iso(-1),user_name:"خالد الحكيمي",archive_type:"تصدير",title:"كشف الصناديق",description:"تصدير CSV",reference_no:"EXP-2026-011"}
   ],
   cashbox_ledger: [
-    {id:"led-open-1",cashbox_id:"cb-1",transaction_type:"adjustment",reference_table:"opening_import",reference_id:null,debit:0,credit:3320000,currency:"YER",description:"رصيد مرحل قبل تشغيل النسخة",transaction_at:iso(-30),created_at:iso(-30)},
+    {id:"led-cr-1",cashbox_id:"cb-1",transaction_type:"donation",reference_table:"cash_receipts",reference_id:"cr-1",debit:0,credit:500000,currency:"YER",description:"سند قبض - CR-2026-0001",transaction_at:iso(-35),created_at:iso(-35)},
+    {id:"led-cr-2",cashbox_id:"cb-1",transaction_type:"donation",reference_table:"cash_receipts",reference_id:"cr-2",debit:0,credit:2200000,currency:"YER",description:"سند قبض - CR-2026-0002",transaction_at:iso(-28),created_at:iso(-28)},
+    {id:"led-cr-3",cashbox_id:"cb-2",transaction_type:"donation",reference_table:"cash_receipts",reference_id:"cr-3",debit:0,credit:750000,currency:"YER",description:"سند قبض - CR-2026-0003",transaction_at:iso(-10),created_at:iso(-10)},
+    {id:"led-ct-1-out",cashbox_id:"cb-1",transaction_type:"transfer_out",reference_table:"cash_transfers",reference_id:"ct-1",debit:500000,credit:0,currency:"YER",description:"تحويل صادر - CT-2026-0001",transaction_at:iso(-8),created_at:iso(-8)},
+    {id:"led-ct-1-in",cashbox_id:"cb-2",transaction_type:"transfer_in",reference_table:"cash_transfers",reference_id:"ct-1",debit:0,credit:500000,currency:"YER",description:"تحويل وارد - CT-2026-0001",transaction_at:iso(-8),created_at:iso(-8)},
     {id:"led-cf-1",cashbox_id:"cb-1",transaction_type:"campaign_funding",reference_table:"campaign_funding",reference_id:"cf-1",debit:1000000,credit:0,currency:"YER",description:"تمويل حملة - CF-2026-0001",transaction_at:iso(-5),created_at:iso(-5)},
-    {id:"led-open-2",cashbox_id:"cb-2",transaction_type:"adjustment",reference_table:"opening_import",reference_id:null,debit:0,credit:840000,currency:"YER",description:"رصيد مرحل قبل تشغيل النسخة",transaction_at:iso(-30),created_at:iso(-30)},
-    {id:"led-open-3",cashbox_id:"cb-3",transaction_type:"adjustment",reference_table:"opening_import",reference_id:null,debit:250,credit:0,currency:"USD",description:"تسوية رصيد افتتاحي",transaction_at:iso(-30),created_at:iso(-30)}
+    {id:"led-cf-2",cashbox_id:"cb-2",transaction_type:"campaign_funding",reference_table:"campaign_funding",reference_id:"cf-2",debit:500000,credit:0,currency:"YER",description:"تمويل حملة - CF-2026-0002",transaction_at:iso(-6),created_at:iso(-6)}
   ],
   campaign_funding: [
-    {id:"cf-1",funding_no:"CF-2026-0001",funding_date:dateOnly(-5),campaign_id:"c-1",cashbox_id:"cb-1",amount:1000000,currency:"YER",status:"posted",notes:"تمويل أولي للحملة",posted_at:iso(-5),created_at:iso(-5)}
+    {id:"cf-1",funding_no:"CF-2026-0001",funding_date:dateOnly(-5),campaign_id:"c-1",cashbox_id:"cb-1",amount:1000000,currency:"YER",status:"posted",notes:"تمويل أولي للحملة",posted_at:iso(-5),created_at:iso(-5)},
+    {id:"cf-2",funding_no:"CF-2026-0002",funding_date:dateOnly(-6),campaign_id:"c-3",cashbox_id:"cb-2",amount:500000,currency:"YER",status:"posted",notes:"تمويل كفالة الأيتام",posted_at:iso(-6),created_at:iso(-6)}
   ],
   campaign_distributors: [
-    {id:"cd-1",campaign_id:"c-1",delegate_id:"d-1",cashbox_id:"cb-1",area_name:"حدة",allocated_amount:500000,spent_amount:120000,returned_amount:0,remaining_amount:380000,status:"active",assigned_at:iso(-4),notes:"موزع منطقة حدة"},
-    {id:"cd-2",campaign_id:"c-1",delegate_id:"d-2",cashbox_id:"cb-1",area_name:"التحرير",allocated_amount:300000,spent_amount:50000,returned_amount:0,remaining_amount:250000,status:"active",assigned_at:iso(-4),notes:"موزع منطقة التحرير"}
+    {id:"cd-1",campaign_id:"c-1",delegate_id:"d-1",cashbox_id:"cb-1",area_name:"حدة",allocated_amount:500000,spent_amount:120000,returned_amount:0,remaining_amount:380000,status:"active",assigned_at:iso(-4),notes:"حد صرف موزع منطقة حدة"},
+    {id:"cd-2",campaign_id:"c-1",delegate_id:"d-3",cashbox_id:"cb-1",area_name:"التحرير",allocated_amount:300000,spent_amount:180000,returned_amount:0,remaining_amount:120000,status:"active",assigned_at:iso(-5),notes:"حد صرف موزعة منطقة التحرير"},
+    {id:"cd-3",campaign_id:"c-3",delegate_id:"d-1",cashbox_id:"cb-2",area_name:"حدة",allocated_amount:300000,spent_amount:90000,returned_amount:0,remaining_amount:210000,status:"active",assigned_at:iso(-6),notes:"حد صرف كفالة الأيتام"}
   ],
   cashboxes: [
-    {id:"cb-1",name:"الصندوق الرئيسي",code:"CB-HQ-01",branch_id:"br-1",currency:"YER",opening_balance:3000000,current_balance:5320000,responsible_name:"خالد الحكيمي",is_active:true,notes:"الصندوق المركزي",created_at:iso(-200)},
-    {id:"cb-2",name:"صندوق فرع حدة",code:"CB-HAD-01",branch_id:"br-2",currency:"YER",opening_balance:1000000,current_balance:1840000,responsible_name:"سارة القحطاني",is_active:true,notes:"صرف ميداني",created_at:iso(-150)},
-    {id:"cb-3",name:"صندوق الدولار",code:"CB-USD-01",branch_id:"br-1",currency:"USD",opening_balance:2000,current_balance:1750,responsible_name:"خالد الحكيمي",is_active:true,notes:"تبرعات بالعملة الأجنبية",created_at:iso(-90)}
+    {id:"cb-1",name:"الصندوق الرئيسي",code:"CB-HQ-01",branch_id:"br-1",currency:"YER",opening_balance:3000000,current_balance:4200000,responsible_name:"خالد الحكيمي",is_active:true,notes:"الصندوق المركزي",created_at:iso(-200)},
+    {id:"cb-2",name:"صندوق فرع حدة",code:"CB-HAD-01",branch_id:"br-2",currency:"YER",opening_balance:1000000,current_balance:1750000,responsible_name:"سارة القحطاني",is_active:true,notes:"صرف ميداني",created_at:iso(-150)},
+    {id:"cb-3",name:"صندوق الدولار",code:"CB-USD-01",branch_id:"br-1",currency:"USD",opening_balance:2000,current_balance:2000,responsible_name:"خالد الحكيمي",is_active:true,notes:"تبرعات بالعملة الأجنبية",created_at:iso(-90)}
   ],
   cashbox_users: [
     {id:"cbu-1",cashbox_id:"cb-1",user_id:"u-accountant",delegate_id:null,can_receive:true,can_pay:true,daily_limit:3000000,is_active:true},
@@ -173,13 +186,9 @@ export const demoData = {
   cash_transfers: [
     {id:"ct-1",transfer_no:"CT-2026-0001",transfer_date:dateOnly(-8),from_cashbox_id:"cb-1",to_cashbox_id:"cb-2",amount:500000,currency:"YER",status:"posted",notes:"تغذية صندوق الفرع",created_at:iso(-8)}
   ],
-  delegate_advances: [
-    {id:"da-1",advance_no:"ADV-2026-001",advance_date:dateOnly(-12),delegate_id:"d-1",cashbox_id:"cb-2",amount:800000,spent_amount:420000,remaining_amount:380000,status:"open",notes:"توزيع منطقة حدة",created_at:iso(-12)},
-    {id:"da-2",advance_no:"ADV-2026-002",advance_date:dateOnly(-6),delegate_id:"d-2",cashbox_id:"cb-1",amount:500000,spent_amount:300000,remaining_amount:200000,status:"open",notes:"توزيع التحرير",created_at:iso(-6)}
-  ],
   distribution_assignments: [
-    {id:"dist-1",beneficiary_id:"b-1",beneficiary_name:"محمد صالح علي",phone:"771100200",area:"حدة - جوار مدرسة النهضة",delegate_id:"d-1",delegate_name:"عبدالله الصبري",amount:120000,delivery_status:"received",delivered_at:iso(-1)},
-    {id:"dist-2",beneficiary_id:"b-3",beneficiary_name:"عبدالرحمن يحيى",phone:"771100400",area:"حدة - شارع الخمسين",delegate_id:"d-1",delegate_name:"عبدالله الصبري",amount:100000,delivery_status:"pending",delivered_at:null}
+    {id:"dist-1",beneficiary_id:"b-1",beneficiary_name:"محمد صالح علي",phone:"771100200",area:"حدة - جوار مدرسة النهضة",delegate_id:"d-1",delegate_name:"عبدالله الصبري",campaign_id:"c-1",amount:120000,delivery_status:"received",delivered_at:iso(-30),payment_id:"cp-1"},
+    {id:"dist-2",beneficiary_id:"b-3",beneficiary_name:"عبدالرحمن يحيى",phone:"771100400",area:"حدة - شارع الخمسين",delegate_id:"d-1",delegate_name:"عبدالله الصبري",campaign_id:"c-1",amount:100000,delivery_status:"pending",delivered_at:null,payment_id:"cp-4"}
   ],
   wallet_providers: [
     {id:"wp-1",name:"محفظة كاش",provider_type:"wallet",account_format:"9 أرقام هاتف",export_format:"xlsx",is_active:true,notes:"الأعمدة: الاسم، الهاتف، المبلغ، المرجع"},
@@ -193,7 +202,7 @@ export const demoData = {
     {id:"dr-2",batch_id:"bd-1",batch_no:"BATCH-2026-001",beneficiary_name:"عبدالرحمن يحيى",wallet_no:"771100400",amount:90000,provider_reference:null,result:"failed",processed_at:iso(-2.9)}
   ],
   units: [
-    {id:"un-1",name:"قطعة",symbol:"قطعة",unit_type:"count",is_default:true,is_active:true},{id:"un-2",name:"كيس",symbol:"كيس",unit_type:"count",is_default:true,is_active:true},{id:"un-3",name:"كرتون",symbol:"كرتون",unit_type:"count",is_default:true,is_active:true},{id:"un-4",name:"كيلوجرام",symbol:"كجم",unit_type:"weight",is_default:true,is_active:true},{id:"un-5",name:"لتر",symbol:"لتر",unit_type:"volume",is_default:true,is_active:true}
+    {id:"un-1",name:"قطعة",symbol:"قطعة",is_active:true},{id:"un-2",name:"كيس",symbol:"كيس",is_active:true},{id:"un-3",name:"كرتون",symbol:"كرتون",is_active:true},{id:"un-4",name:"كيلوجرام",symbol:"كجم",is_active:true},{id:"un-5",name:"لتر",symbol:"لتر",is_active:true}
   ],
   warehouses: [
     {id:"wh-1",name:"المخزن الرئيسي",code:"WH-HQ-01",branch_id:"br-1",address:"صنعاء - شارع المطار - جوار مسجد الرحمة",manager_name:"علي الآنسي",phone:"777000555",is_active:true},
@@ -216,6 +225,6 @@ export const demoData = {
     {id:"imp-2",created_at:iso(-4),target_table:"items",target_name:"دليل الأصناف",file_name:"items.csv",total_rows:80,success_rows:80,error_rows:0,status:"synced"}
   ],
   system_settings: [
-    { id: 1, organization_name: "مؤسسة الخير للزكاة والتنمية", system_name: "نظام إدارة الزكاة والتبرعات", logo_url: "assets/logo.svg", voucher_prefixes: { cash_receipt: "CR", cash_payment: "CP", in_kind_receipt: "IKR", in_kind_payment: "IKP" }, duplicate_policy: { national_id: "block", phone: "warn", name: "warn" }, require_payment_approval: true, allow_offline_drafts: true, allow_final_offline: false, sync_mode: "automatic", max_login_attempts: 5, lockout_minutes: 15, require_device_authorization: true, complaints_phone: "8000000", stock_alert_days: 30, currency: "YER", print_footer: "جزاكم الله خيراً", retention_years: 10, updated_at: iso(-3) }
+    { id: 1, organization_name: "مؤسسة الخير للزكاة والتنمية", system_name: "نظام إدارة الزكاة والتبرعات", logo_url: "assets/logo.svg", voucher_prefixes: { cash_receipt: "CR", cash_payment: "CP", in_kind_receipt: "IKR", in_kind_payment: "IKP" }, duplicate_policy: { national_id: "block", phone: "warn", name: "warn" }, require_payment_approval: true, auto_post_all_operations: false, allow_offline_drafts: true, allow_final_offline: false, sync_mode: "automatic", max_login_attempts: 5, lockout_minutes: 15, require_device_authorization: true, complaints_phone: "8000000", stock_alert_days: 30, currency: "YER", print_footer: "جزاكم الله خيراً", retention_years: 10, updated_at: iso(-3) }
   ]
 };

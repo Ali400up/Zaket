@@ -38,44 +38,40 @@ export const statusLabels = {
   review: "تحتاج مراجعة",
   partial: "جزئي",
   full: "كامل",
-  reopened: "أعيد فتحه"
+  reopened: "أعيد فتحه",
+  success: "ناجحة",
+  blocked: "محظور",
+  pending_device: "بانتظار اعتماد الجهاز"
 };
 
 export const menuSections = [
   { label: "الرئيسية", items: [
     { id: "dashboard", label: "لوحة التحكم", icon: "fa-solid fa-grid-2" },
-    { id: "global-search", label: "البحث العام", icon: "fa-solid fa-magnifying-glass" }
+    { id: "global-search", label: "البحث العام", icon: "fa-solid fa-magnifying-glass" },
+    { id: "guide", label: "دليل الاستخدام", icon: "fa-solid fa-circle-question" }
   ]},
-  { label: "إدارة النظام", items: [
-    { id: "users", label: "المستخدمون والصلاحيات", icon: "fa-solid fa-user-shield" },
+  { label: "التهيئة والأدلة", items: [
     { id: "branches", label: "الفروع والمناطق", icon: "fa-solid fa-sitemap" },
-    { id: "devices", label: "الأجهزة المرخصة", icon: "fa-solid fa-laptop-file" },
-    { id: "login-attempts", label: "محاولات تسجيل الدخول", icon: "fa-solid fa-shield-halved" },
-    { id: "user-tracking", label: "متابعة المستخدم", icon: "fa-solid fa-user-clock" },
-    { id: "user-archives", label: "محفوظات المستخدم", icon: "fa-solid fa-box-archive" }
-  ]},
-  { label: "إدارة الأطراف", items: [
     { id: "delegates", label: "دليل الموزعين", icon: "fa-solid fa-people-carry-box" },
     { id: "donors", label: "دليل المتبرعين", icon: "fa-solid fa-hand-holding-heart" },
     { id: "classifications", label: "الفئات والحالات الصحية", icon: "fa-solid fa-tags" },
-    { id: "beneficiaries", label: "دليل المستفيدين", icon: "fa-solid fa-people-roof" }
+    { id: "beneficiaries", label: "دليل المستفيدين", icon: "fa-solid fa-people-roof" },
+    { id: "units", label: "دليل الوحدات", icon: "fa-solid fa-ruler-combined" },
+    { id: "inventory", label: "دليل الأصناف", icon: "fa-solid fa-boxes-stacked" },
+    { id: "warehouses", label: "دليل المخازن", icon: "fa-solid fa-warehouse" },
+    { id: "cashboxes", label: "دليل الصناديق", icon: "fa-solid fa-vault" }
   ]},
-  { label: "الحملات والنقدية", items: [
+  { label: "العمليات النقدية", items: [
     { id: "campaigns", label: "الحملات الخيرية", icon: "fa-solid fa-bullseye" },
     { id: "campaign-funding", label: "تمويل الحملات", icon: "fa-solid fa-sack-dollar" },
     { id: "campaign-distributors", label: "موزعو الحملات", icon: "fa-solid fa-people-group" },
-    { id: "cashboxes", label: "الصناديق", icon: "fa-solid fa-vault" },
     { id: "cashbox-users", label: "صلاحيات الصناديق", icon: "fa-solid fa-key" },
     { id: "cash-receipts", label: "سندات القبض النقدي", icon: "fa-solid fa-money-bill-transfer" },
     { id: "cash-payments", label: "سندات الصرف النقدي", icon: "fa-solid fa-hand-holding-dollar" },
     { id: "cash-transfers", label: "التحويل بين الصناديق", icon: "fa-solid fa-right-left" },
-    { id: "delegate-advances", label: "عهد الموزعين النقدية", icon: "fa-solid fa-wallet" },
-    { id: "quick-delivery", label: "التسليم السريع للموزع", icon: "fa-solid fa-list-check" }
+    { id: "quick-delivery", label: "التسليم السريع للمستفيد", icon: "fa-solid fa-list-check" }
   ]},
-  { label: "المخزون والعيني", items: [
-    { id: "units", label: "دليل الوحدات", icon: "fa-solid fa-ruler-combined" },
-    { id: "inventory", label: "دليل الأصناف", icon: "fa-solid fa-boxes-stacked" },
-    { id: "warehouses", label: "دليل المخازن", icon: "fa-solid fa-warehouse" },
+  { label: "العمليات العينية", items: [
     { id: "stock-balances", label: "أرصدة المخازن", icon: "fa-solid fa-layer-group" },
     { id: "in-kind-receipts", label: "سندات القبض العيني", icon: "fa-solid fa-truck-ramp-box" },
     { id: "campaign-in-kind-funding", label: "تمويل الحملات العيني", icon: "fa-solid fa-boxes-packing" },
@@ -86,7 +82,12 @@ export const menuSections = [
     { id: "imports", label: "الاستيراد من Excel", icon: "fa-solid fa-file-import" },
     { id: "sync", label: "الاتصال والمزامنة", icon: "fa-solid fa-arrows-rotate" }
   ]},
-  { label: "الرقابة والتقارير", items: [
+  { label: "الرقابة والإدارة", items: [
+    { id: "users", label: "المستخدمون والصلاحيات", icon: "fa-solid fa-user-shield" },
+    { id: "devices", label: "الأجهزة المرخصة", icon: "fa-solid fa-laptop-file" },
+    { id: "login-attempts", label: "محاولات تسجيل الدخول", icon: "fa-solid fa-shield-halved" },
+    { id: "user-tracking", label: "متابعة المستخدم", icon: "fa-solid fa-user-clock" },
+    { id: "user-archives", label: "محفوظات المستخدم", icon: "fa-solid fa-box-archive" },
     { id: "reports", label: "التقارير", icon: "fa-solid fa-chart-column" },
     { id: "audit", label: "سجل العمليات", icon: "fa-solid fa-clock-rotate-left" },
     { id: "closings", label: "إقفال الحسابات", icon: "fa-solid fa-file-circle-check" },
@@ -129,7 +130,9 @@ export const screenConfigs = {
   },
   delegates: {
     title: "دليل الموزعين",
-    description: "إدارة الأشخاص المسؤولين عن استلام التبرعات وتوزيعها وربطهم بحسابات الدخول.",
+    description: "إدارة الموزعين. عند ربط حساب مستخدم تُعبّأ بيانات الاسم والهاتف تلقائياً، فلا يلزم تكرارها.",
+    importable: true,
+    dateKey: "created_at",
     table: "delegates",
     icon: "fa-solid fa-people-carry-box",
     singular: "موزع",
@@ -139,14 +142,18 @@ export const screenConfigs = {
       { key: "national_id", label: "رقم الهوية" },
       { key: "delegate_type", label: "النوع", type: "status" },
       { key: "cash_balance", label: "الرصيد النقدي", type: "currency" },
-      { key: "inventory_count", label: "العهدة العينية", type: "number" },
+      { key: "inventory_count", label: "المخزون المرتبط", type: "number" },
       { key: "is_active", label: "الحالة", type: "boolean-status" }
     ],
     fields: [
+      { key: "profile_id", label: "حساب المستخدم المرتبط - اختياري", type: "relation", relation: { table: "profiles", label: "full_name" }, help: "اختياره ينسخ الاسم والهاتف من الحساب تلقائياً." },
       { key: "full_name", label: "الاسم الكامل", type: "text", required: true },
-      { key: "phone", label: "رقم الهاتف", type: "tel", required: true },
+      { key: "phone", label: "رقم الهاتف الأساسي", type: "tel", help: "مطلوب فقط إذا لم تربط حساب مستخدم." },
+      { key: "phone_secondary", label: "رقم هاتف إضافي", type: "tel" },
       { key: "national_id", label: "رقم الهوية", type: "text" },
-      { key: "profile_id", label: "حساب المستخدم المرتبط", type: "relation", relation: { table: "profiles", label: "full_name" } },
+      { key: "address", label: "العنوان", type: "textarea", full: true },
+      { key: "profile_image_url", label: "صورة شخصية - اختياري", type: "file", folder: "delegates/profiles" },
+      { key: "identity_image_url", label: "صورة الهوية - اختياري", type: "file", folder: "delegates/identity" },
       { key: "delegate_type", label: "نوع الموزع", type: "select", required: true, options: [
         { value: "cash", label: "نقدي" }, { value: "in_kind", label: "عيني" }, { value: "both", label: "نقدي وعيني" }
       ]},
@@ -162,6 +169,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-hand-holding-heart",
     singular: "متبرع",
     primaryLabel: "إضافة متبرع",
+    importable: true,
+    dateKey: "created_at",
     columns: [
       { key: "name", label: "المتبرع", type: "name", subKey: "phone" },
       { key: "donor_type", label: "النوع", type: "status" },
@@ -177,6 +186,10 @@ export const screenConfigs = {
         { value: "individual", label: "فرد" }, { value: "organization", label: "جهة" }
       ]},
       { key: "phone", label: "رقم الهاتف", type: "tel" },
+      { key: "phone_secondary", label: "رقم هاتف إضافي", type: "tel" },
+      { key: "address", label: "العنوان", type: "textarea", full: true },
+      { key: "representative_name", label: "اسم المندوب / ممثل الجهة", type: "text" },
+      { key: "representative_phone", label: "هاتف المندوب / ممثل الجهة", type: "tel" },
       { key: "identity_no", label: "رقم الهوية أو السجل التجاري", type: "text" },
       { key: "email", label: "البريد الإلكتروني", type: "email" },
       { key: "is_anonymous", label: "إظهار الاسم في التقارير باسم فاعل خير", type: "switch", default: false, full: true },
@@ -187,7 +200,8 @@ export const screenConfigs = {
   },
   beneficiary_categories: {
     title: "فئات المستفيدين",
-    description: "قيم موحدة لتصنيف المستفيدين وترتيب الأولوية.",
+    description: "تصنيف اجتماعي أو معيشي للمستفيد (فقير، يتيم، نازح...). يختلف عن الحالة الصحية.",
+    importable: true,
     table: "beneficiary_categories",
     icon: "fa-solid fa-tags",
     singular: "فئة",
@@ -208,7 +222,8 @@ export const screenConfigs = {
   },
   health_conditions: {
     title: "الحالات الصحية",
-    description: "قائمة صحية موحدة تستخدم داخل ملف المستفيد.",
+    description: "وصف طبي مستقل (إعاقة، مرض مزمن...). لا يدمج مع الفئة الاجتماعية كي يمكن تسجيل الحالتين معاً.",
+    importable: true,
     table: "health_conditions",
     icon: "fa-solid fa-notes-medical",
     singular: "حالة صحية",
@@ -234,6 +249,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-people-roof",
     singular: "مستفيد",
     primaryLabel: "إضافة مستفيد",
+    importable: true,
+    dateKey: "created_at",
     columns: [
       { key: "full_name", label: "المستفيد", type: "name", subKey: "file_no" },
       { key: "national_id", label: "رقم الهوية" },
@@ -247,12 +264,21 @@ export const screenConfigs = {
       { key: "full_name", label: "الاسم الكامل", type: "text", required: true },
       { key: "national_id", label: "رقم الهوية", type: "text", help: "اختياري، ويجب أن يكون فريداً عند إدخاله." },
       { key: "phone", label: "رقم الهاتف", type: "tel" },
+      { key: "phone_secondary", label: "رقم هاتف إضافي", type: "tel" },
+      { key: "birth_date", label: "تاريخ الميلاد", type: "date" },
       { key: "gender", label: "الجنس", type: "select", options: [{ value: "male", label: "ذكر" }, { value: "female", label: "أنثى" }] },
       { key: "age", label: "العمر", type: "number", min: 0, max: 120 },
       { key: "marital_status", label: "الحالة الاجتماعية", type: "select", options: [
         { value: "single", label: "أعزب" }, { value: "married", label: "متزوج" }, { value: "widowed", label: "أرمل" }, { value: "divorced", label: "مطلق" }
       ]},
       { key: "family_size", label: "عدد أفراد الأسرة", type: "number", required: true, min: 1, default: 1 },
+      { key: "governorate", label: "المحافظة", type: "text" },
+      { key: "district", label: "المديرية", type: "text" },
+      { key: "village", label: "العزلة / القرية", type: "text" },
+      { key: "address", label: "العنوان التفصيلي", type: "textarea", full: true },
+      { key: "guardian_name", label: "اسم ولي الأمر / العائل", type: "text" },
+      { key: "housing_status", label: "حالة السكن", type: "text" },
+      { key: "monthly_income", label: "الدخل الشهري", type: "currency", min: 0 },
       { key: "category_id", label: "فئة المستفيد", type: "relation", relation: { table: "beneficiary_categories", label: "name" }, required: true },
       { key: "health_condition_id", label: "الحالة الصحية", type: "relation", relation: { table: "health_conditions", label: "name" } },
       { key: "delegate_id", label: "الموزع المسؤول", type: "relation", relation: { table: "delegates", label: "full_name" } },
@@ -263,6 +289,8 @@ export const screenConfigs = {
         { value: "draft", label: "مسودة" }, { value: "under_review", label: "تحت المراجعة" }, { value: "approved", label: "معتمد" }, { value: "rejected", label: "مرفوض" }, { value: "suspended", label: "موقوف" }
       ]},
       { key: "source", label: "مصدر التسجيل", type: "text", default: "إدخال مباشر" },
+      { key: "profile_image_url", label: "صورة المستفيد - اختياري", type: "file", folder: "beneficiaries/profiles" },
+      { key: "identity_image_url", label: "صورة الهوية - اختياري", type: "file", folder: "beneficiaries/identity" },
       { key: "notes", label: "الملاحظات", type: "textarea", full: true }
     ],
     actions: ["view", "edit", "duplicate-check", "approve", "toggle", "aid-history"]
@@ -311,6 +339,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-sack-dollar",
     singular: "تمويل حملة",
     primaryLabel: "إضافة تمويل",
+    dateKey: "funding_date",
+    backdateRestricted: true,
     columns: [
       { key: "funding_no", label: "رقم التمويل", type: "name", subKey: "funding_date" },
       { key: "campaign_name", label: "الحملة" },
@@ -320,7 +350,7 @@ export const screenConfigs = {
       { key: "created_by_name", label: "المستخدم" }
     ],
     fields: [
-      { key: "funding_date", label: "التاريخ", type: "date", required: true },
+      { key: "funding_date", label: "التاريخ", type: "date", required: true, default: "today" },
       { key: "campaign_id", label: "الحملة", type: "relation", relation: { table: "campaigns", label: "name", filter: { status: "open" } }, required: true },
       { key: "cashbox_id", label: "الصندوق الممول", type: "relation", relation: { table: "cashboxes", label: "name", filter: { is_active: true } }, required: true },
       { key: "amount", label: "مبلغ التمويل", type: "currency", required: true, min: 1 },
@@ -331,7 +361,7 @@ export const screenConfigs = {
   },
   campaign_distributors: {
     title: "موزعو الحملات",
-    description: "ربط أكثر من موزع بالحملة وتحديد العهدة والمنطقة ومتابعة المصروف والمتبقي والمرتجع.",
+    description: "ربط الموزع بالحملة والصندوق وتحديد حد الصرف المخصص ومتابعة المصروف والمتبقي والمرتجع.",
     table: "campaign_distributors",
     icon: "fa-solid fa-people-group",
     singular: "موزع حملة",
@@ -339,7 +369,7 @@ export const screenConfigs = {
     columns: [
       { key: "campaign_name", label: "الحملة", type: "name", subKey: "delegate_name" },
       { key: "area_name", label: "المنطقة" },
-      { key: "allocated_amount", label: "العهدة", type: "currency" },
+      { key: "allocated_amount", label: "المبلغ المخصص", type: "currency" },
       { key: "spent_amount", label: "المصروف", type: "currency" },
       { key: "returned_amount", label: "المرتجع", type: "currency" },
       { key: "remaining_amount", label: "المتبقي", type: "currency" },
@@ -348,9 +378,9 @@ export const screenConfigs = {
     fields: [
       { key: "campaign_id", label: "الحملة", type: "relation", relation: { table: "campaigns", label: "name", filter: { status: "open" } }, required: true },
       { key: "delegate_id", label: "الموزع", type: "relation", relation: { table: "delegates", label: "full_name", filter: { is_active: true } }, required: true },
-      { key: "cashbox_id", label: "الصندوق المرتبط", type: "relation", relation: { table: "cashboxes", label: "name", filter: { is_active: true } } },
+      { key: "cashbox_id", label: "الصندوق المرتبط", type: "relation", relation: { table: "cashboxes", label: "name", filter: { is_active: true } }, required: true },
       { key: "area_name", label: "المنطقة أو الحارة", type: "text", required: true },
-      { key: "allocated_amount", label: "مبلغ العهدة", type: "currency", default: 0, min: 0 },
+      { key: "allocated_amount", label: "حد الصرف المخصص", type: "currency", default: 0, min: 0 },
       { key: "status", label: "الحالة", type: "select", default: "active", options: [{ value: "active", label: "نشط" }, { value: "settled", label: "تمت التسوية" }, { value: "suspended", label: "موقوف" }] },
       { key: "notes", label: "ملاحظات", type: "textarea", full: true }
     ],
@@ -363,6 +393,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-money-bill-transfer",
     singular: "سند قبض",
     primaryLabel: "سند قبض جديد",
+    dateKey: "receipt_date",
+    backdateRestricted: true,
     columns: [
       { key: "voucher_no", label: "رقم السند", type: "name", subKey: "receipt_date" },
       { key: "donor_name", label: "المتبرع" },
@@ -372,7 +404,7 @@ export const screenConfigs = {
       { key: "status", label: "الحالة", type: "status" }
     ],
     fields: [
-      { key: "receipt_date", label: "التاريخ", type: "date", required: true },
+      { key: "receipt_date", label: "التاريخ", type: "date", required: true, default: "today", help: "التاريخ السابق يحتاج صلاحية المدير أو المشرف ويظهر تنبيه قبل الحفظ." },
       { key: "cashbox_id", label: "الصندوق المستلم", type: "relation", relation: { table: "cashboxes", label: "name" }, required: true },
       { key: "donor_id", label: "المتبرع", type: "relation", relation: { table: "donors", label: "name" }, required: true },
       { key: "amount", label: "المبلغ", type: "currency", required: true, min: 1 },
@@ -398,6 +430,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-hand-holding-dollar",
     singular: "سند صرف",
     primaryLabel: "سند صرف جديد",
+    dateKey: "payment_date",
+    backdateRestricted: true,
     columns: [
       { key: "voucher_no", label: "رقم السند", type: "name", subKey: "payment_date" },
       { key: "beneficiary_name", label: "المستفيد" },
@@ -407,13 +441,13 @@ export const screenConfigs = {
       { key: "status", label: "الحالة", type: "status" }
     ],
     fields: [
-      { key: "payment_date", label: "التاريخ", type: "date", required: true },
-      { key: "cashbox_id", label: "الصندوق المصروف منه", type: "relation", relation: { table: "cashboxes", label: "name" }, required: true },
-      { key: "delegate_id", label: "الموزع", type: "relation", relation: { table: "delegates", label: "full_name" }, required: true },
-      { key: "beneficiary_id", label: "المستفيد المعتمد", type: "relation", relation: { table: "beneficiaries", label: "full_name", filter: { status: "approved" } }, required: true },
+      { key: "payment_date", label: "التاريخ", type: "date", required: true, default: "today" },
+      { key: "beneficiary_id", label: "المستفيد المعتمد", type: "autocompleteRelation", relation: { table: "beneficiaries", label: "full_name", filter: { status: "approved" } }, required: true, placeholder: "ابدأ بكتابة أول حروف اسم المستفيد" },
       { key: "campaign_id", label: "الحملة", type: "relation", relation: { table: "campaigns", label: "name", filter: { status: "open" } }, required: true },
+      { key: "delegate_id", label: "الموزع (تلقائي)", type: "relation", relation: { table: "delegates", label: "full_name", filter: { is_active: true } }, required: true, lockForNonAdmin: true, help: "يُختار من ملف المستفيد تلقائياً، ولا يستطيع تغييره إلا مدير النظام." },
+      { key: "cashbox_id", label: "الصندوق (تلقائي)", type: "relation", relation: { table: "cashboxes", label: "name", filter: { is_active: true } }, required: true, lockForAll: true },
       { key: "amount", label: "المبلغ", type: "currency", required: true, min: 1 },
-      { key: "currency", label: "العملة", type: "select", default: "YER", options: [
+      { key: "currency", label: "العملة (تلقائية)", type: "select", default: "YER", lockForAll: true, options: [
         { value: "YER", label: "ريال يمني" }, { value: "SAR", label: "ريال سعودي" }, { value: "USD", label: "دولار أمريكي" }
       ]},
       { key: "delivery_method", label: "طريقة التسليم", type: "select", required: true, options: [
@@ -428,7 +462,7 @@ export const screenConfigs = {
       { key: "status", label: "حالة السند", type: "select", default: "draft", options: [
         { value: "draft", label: "مسودة" }, { value: "under_review", label: "تحت المراجعة" }, { value: "approved", label: "معتمد" }
       ]},
-      { key: "override_reason", label: "سبب الاستثناء من منع التكرار", type: "textarea", full: true, help: "يترك فارغاً إلا عند وجود موافقة استثنائية." },
+      { key: "override_reason", label: "سبب الاستثناء من منع التكرار", type: "textarea", full: true, adminOnly: true, help: "لا يظهر إلا لمدير النظام، ويجب توثيق سبب الاستثناء." },
       { key: "notes", label: "الملاحظات", type: "textarea", full: true }
     ],
     actions: ["view", "edit", "post", "confirm-receipt", "print", "cancel"]
@@ -440,6 +474,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-boxes-stacked",
     singular: "صنف",
     primaryLabel: "إضافة صنف",
+    importable: true,
+    dateKey: "created_at",
     columns: [
       { key: "name", label: "الصنف", type: "name", subKey: "category" },
       { key: "unit", label: "الوحدة" },
@@ -467,6 +503,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-truck-ramp-box",
     singular: "سند قبض عيني",
     primaryLabel: "سند قبض عيني جديد",
+    dateKey: "receipt_date",
+    backdateRestricted: true,
     columns: [
       { key: "voucher_no", label: "رقم السند", type: "name", subKey: "receipt_date" },
       { key: "donor_name", label: "المتبرع" },
@@ -475,7 +513,7 @@ export const screenConfigs = {
       { key: "status", label: "الحالة", type: "status" }
     ],
     fields: [
-      { key: "receipt_date", label: "التاريخ", type: "date", required: true },
+      { key: "receipt_date", label: "التاريخ", type: "date", required: true, default: "today" },
       { key: "donor_id", label: "المتبرع", type: "relation", relation: { table: "donors", label: "name" }, required: true },
       { key: "warehouse_id", label: "المخزن المستلم", type: "relation", relation: { table: "warehouses", label: "name", filter: { is_active: true } }, required: true },
       { key: "status", label: "حالة السند", type: "select", default: "draft", options: [
@@ -488,21 +526,23 @@ export const screenConfigs = {
   },
   campaign_in_kind_funding: {
     title: "تمويل الحملات العيني",
-    description: "اختيار الأصناف والكميات من رصيد المخزن وتخصيصها لحملة عينية أو مختلطة.",
+    description: "نقل أصناف مسماة من المخزن العام إلى مخزون الحملة العيني، وليس إلى صندوق نقدي.",
     table: "campaign_in_kind_funding",
     icon: "fa-solid fa-boxes-packing",
     singular: "تمويل حملة عيني",
     primaryLabel: "تمويل عيني جديد",
+    dateKey: "funding_date",
+    backdateRestricted: true,
     columns: [
       { key: "funding_no", label: "رقم التمويل", type: "name", subKey: "funding_date" },
       { key: "campaign_name", label: "الحملة" },
       { key: "warehouse_name", label: "المخزن" },
-      { key: "items_count", label: "عدد الأصناف", type: "number" },
+      { key: "items_summary", label: "الأصناف والكميات" },
       { key: "total_quantity", label: "إجمالي الكمية", type: "number" },
       { key: "status", label: "الحالة", type: "status" }
     ],
     fields: [
-      { key: "funding_date", label: "التاريخ", type: "date", required: true },
+      { key: "funding_date", label: "التاريخ", type: "date", required: true, default: "today" },
       { key: "campaign_id", label: "الحملة العينية/المختلطة", type: "relation", relation: { table: "campaigns", label: "name", filter: { status: "open" } }, required: true },
       { key: "warehouse_id", label: "المخزن المصدر", type: "relation", relation: { table: "warehouses", label: "name", filter: { is_active: true } }, required: true },
       { key: "status", label: "حالة التمويل", type: "select", default: "draft", options: [
@@ -511,7 +551,7 @@ export const screenConfigs = {
       { key: "details", label: "الأصناف المخصصة للحملة", type: "lineItems", mode: "funding", full: true, required: true },
       { key: "notes", label: "ملاحظات", type: "textarea", full: true }
     ],
-    actions: ["view", "edit", "post", "print"]
+    actions: ["view", "edit", "post", "print", "cancel"]
   },
   baskets: {
     title: "تعريف السلال الغذائية",
@@ -544,6 +584,8 @@ export const screenConfigs = {
     icon: "fa-solid fa-box-open",
     singular: "سند صرف عيني",
     primaryLabel: "سند صرف عيني جديد",
+    dateKey: "payment_date",
+    backdateRestricted: true,
     columns: [
       { key: "voucher_no", label: "رقم السند", type: "name", subKey: "payment_date" },
       { key: "beneficiary_name", label: "المستفيد" },
@@ -554,10 +596,10 @@ export const screenConfigs = {
       { key: "status", label: "الحالة", type: "status" }
     ],
     fields: [
-      { key: "payment_date", label: "التاريخ", type: "date", required: true },
-      { key: "beneficiary_id", label: "المستفيد المعتمد", type: "relation", relation: { table: "beneficiaries", label: "full_name", filter: { status: "approved" } }, required: true },
+      { key: "payment_date", label: "التاريخ", type: "date", required: true, default: "today" },
+      { key: "beneficiary_id", label: "المستفيد المعتمد", type: "autocompleteRelation", relation: { table: "beneficiaries", label: "full_name", filter: { status: "approved" } }, required: true, placeholder: "ابدأ بكتابة أول حروف اسم المستفيد" },
       { key: "campaign_id", label: "الحملة", type: "relation", relation: { table: "campaigns", label: "name", filter: { status: "open" } }, required: true },
-      { key: "delegate_id", label: "الموزع", type: "relation", relation: { table: "delegates", label: "full_name" }, required: true },
+      { key: "delegate_id", label: "الموزع (تلقائي)", type: "relation", relation: { table: "delegates", label: "full_name", filter: { is_active: true } }, required: true, lockForNonAdmin: true, help: "يُختار من ملف المستفيد تلقائياً، ولا يستطيع تغييره إلا مدير النظام." },
       { key: "distribution_type", label: "نوع الصرف", type: "select", default: "basket", options: [
         { value: "basket", label: "سلة غذائية" }, { value: "manual", label: "أصناف يدوية" }
       ]},
@@ -571,37 +613,39 @@ export const screenConfigs = {
         { value: "draft", label: "مسودة" }, { value: "under_review", label: "تحت المراجعة" }, { value: "approved", label: "معتمد" }
       ]},
       { key: "details", label: "الأصناف اليدوية", type: "lineItems", mode: "payment", full: true },
-      { key: "override_reason", label: "سبب الاستثناء من منع التكرار", type: "textarea", full: true },
+      { key: "override_reason", label: "سبب الاستثناء من منع التكرار", type: "textarea", full: true, adminOnly: true },
       { key: "notes", label: "الملاحظات", type: "textarea", full: true }
     ],
     actions: ["view", "edit", "stock-check", "post", "confirm-receipt", "print", "cancel"]
   },
   branches: {
-    title: "الفروع والمناطق", description: "إدارة الفروع والنطاق الجغرافي والمحافظات والمديريات والعزل والقرى.", table: "branches", icon: "fa-solid fa-sitemap", singular: "فرع", primaryLabel: "إضافة فرع",
+    title: "الفروع والمناطق", description: "إدارة الفروع والنطاق الجغرافي. الرمز معرّف مختصر ثابت يظهر في السندات والتقارير، مثل SNA.", table: "branches", icon: "fa-solid fa-sitemap", singular: "فرع", primaryLabel: "إضافة فرع",
+    importable: true, dateKey: "created_at",
     columns: [{key:"name",label:"الفرع",type:"name",subKey:"code"},{key:"governorate",label:"المحافظة"},{key:"district",label:"المديرية"},{key:"manager_name",label:"المدير"},{key:"is_active",label:"الحالة",type:"boolean-status"}],
-    fields: [{key:"name",label:"اسم الفرع",type:"text",required:true},{key:"code",label:"رمز الفرع",type:"text",required:true},{key:"governorate",label:"المحافظة",type:"text",required:true},{key:"district",label:"المديرية",type:"text"},{key:"address",label:"العنوان التفصيلي",type:"textarea",full:true},{key:"manager_name",label:"مدير الفرع",type:"text"},{key:"phone",label:"الهاتف",type:"tel"},{key:"is_active",label:"نشط",type:"switch",default:true}], actions:["view","edit","toggle"]
+    fields: [{key:"name",label:"اسم الفرع",type:"text",required:true},{key:"code",label:"رمز الفرع - اختياري",type:"text",help:"إذا تركته فارغاً ينشئ النظام رمزاً فريداً تلقائياً."},{key:"governorate",label:"المحافظة",type:"text",required:true},{key:"district",label:"المديرية",type:"text"},{key:"address",label:"العنوان التفصيلي",type:"textarea",full:true},{key:"manager_name",label:"مدير الفرع",type:"text"},{key:"phone",label:"الهاتف",type:"tel"},{key:"is_active",label:"نشط",type:"switch",default:true}], actions:["view","edit","toggle"]
   },
   devices: {
-    title:"الأجهزة المرخصة",description:"منع الدخول من الأجهزة غير المعتمدة وإدارة طلبات الترخيص.",table:"authorized_devices",icon:"fa-solid fa-laptop-file",singular:"جهاز",primaryLabel:"ترخيص جهاز",
+    title:"الأجهزة المرخصة",description:"ينشئ النظام بصمة محلية للجهاز عند الدخول، ويمنع الجهاز الجديد حتى يوافق المدير عليه، مع إمكانية الحظر.",table:"authorized_devices",icon:"fa-solid fa-laptop-file",singular:"جهاز",primaryLabel:null,
     columns:[{key:"device_name",label:"الجهاز",type:"name",subKey:"fingerprint"},{key:"user_name",label:"المستخدم"},{key:"platform",label:"النظام"},{key:"last_seen_at",label:"آخر ظهور",type:"datetime"},{key:"status",label:"الحالة",type:"status"}],
     fields:[{key:"device_name",label:"اسم الجهاز",type:"text",required:true},{key:"user_id",label:"المستخدم",type:"relation",relation:{table:"profiles",label:"full_name"},required:true},{key:"fingerprint",label:"بصمة الجهاز",type:"text",required:true},{key:"platform",label:"النظام والمتصفح",type:"text"},{key:"status",label:"الحالة",type:"select",default:"approved",options:[{value:"pending",label:"بانتظار الموافقة"},{value:"approved",label:"مرخص"},{value:"blocked",label:"محظور"}]},{key:"notes",label:"ملاحظات",type:"textarea",full:true}], actions:["view","edit","toggle"]
   },
   login_attempts: {
-    title:"محاولات تسجيل الدخول",description:"متابعة المحاولات الفاشلة والإيقاف المؤقت والتنبيهات الأمنية.",table:"login_attempts",icon:"fa-solid fa-shield-halved",singular:"محاولة",primaryLabel:null,
+    title:"محاولات تسجيل الدخول",description:"كل دخول ناجح أو فاشل أو مرفوض بسبب جهاز غير معتمد، مع الوقت والجهاز وسبب النتيجة.",table:"login_attempts",icon:"fa-solid fa-shield-halved",singular:"محاولة",primaryLabel:null,
     columns:[{key:"attempted_at",label:"التاريخ والوقت",type:"datetime"},{key:"phone",label:"رقم الهاتف"},{key:"device_name",label:"الجهاز"},{key:"ip_address",label:"عنوان الشبكة"},{key:"result",label:"النتيجة",type:"status"},{key:"lockout_until",label:"الإيقاف حتى",type:"datetime"}],fields:[],actions:["view"]
   },
   user_tracking: {
-    title:"متابعة المستخدم",description:"عرض جلسات المستخدم وآخر نشاط والجهاز والفرع.",table:"user_sessions",icon:"fa-solid fa-user-clock",singular:"جلسة",primaryLabel:null,
-    columns:[{key:"user_name",label:"المستخدم",type:"name",subKey:"role_name"},{key:"device_name",label:"الجهاز"},{key:"branch_name",label:"الفرع"},{key:"login_at",label:"وقت الدخول",type:"datetime"},{key:"last_activity_at",label:"آخر نشاط",type:"datetime"},{key:"status",label:"الحالة",type:"status"}],fields:[],actions:["view"]
+    title:"متابعة المستخدم",description:"عرض جلسات جميع المستخدمين وآخر نشاط، وفتح سجل عمليات كل مستخدم بما فيها عمليات المدير.",table:"user_sessions",icon:"fa-solid fa-user-clock",singular:"جلسة",primaryLabel:null,
+    columns:[{key:"user_name",label:"المستخدم",type:"name",subKey:"role_name"},{key:"device_name",label:"الجهاز"},{key:"branch_name",label:"الفرع"},{key:"login_at",label:"وقت الدخول",type:"datetime"},{key:"last_activity_at",label:"آخر نشاط",type:"datetime"},{key:"status",label:"الحالة",type:"status"}],fields:[],actions:["view","activity"]
   },
   user_archives: {
-    title:"محفوظات المستخدم",description:"أرشيف التعديلات والملفات والتقارير التي أنشأها المستخدم.",table:"user_archives",icon:"fa-solid fa-box-archive",singular:"محفوظ",primaryLabel:null,
-    columns:[{key:"created_at",label:"التاريخ",type:"datetime"},{key:"user_name",label:"المستخدم"},{key:"archive_type",label:"النوع"},{key:"title",label:"العنوان",type:"name",subKey:"description"},{key:"reference_no",label:"المرجع"}],fields:[],actions:["view"]
+    title:"محفوظات المستخدم",description:"عمليات الإضافة INSERT والتعديل UPDATE والحذف DELETE لجميع المستخدمين، مع الجدول والسجل والوقت والنتيجة.",table:"audit_logs",icon:"fa-solid fa-box-archive",singular:"عملية محفوظة",primaryLabel:null,
+    columns:[{key:"created_at",label:"التاريخ",type:"datetime"},{key:"user_name",label:"المستخدم"},{key:"action",label:"العملية",type:"name",subKey:"result"},{key:"table_name",label:"الجدول"},{key:"record_id",label:"معرف السجل"},{key:"result",label:"النتيجة",type:"status"}],fields:[],actions:["view"]
   },
   cashboxes: {
     title:"دليل الصناديق",description:"تعريف الصناديق النقدية ومتابعة أرصدتها وربطها بالفروع والعملات.",table:"cashboxes",icon:"fa-solid fa-vault",singular:"صندوق",primaryLabel:"إضافة صندوق",
+    importable:true,dateKey:"created_at",
     columns:[{key:"name",label:"الصندوق",type:"name",subKey:"code"},{key:"branch_name",label:"الفرع"},{key:"currency",label:"العملة"},{key:"opening_balance",label:"الرصيد الافتتاحي",type:"currency"},{key:"current_balance",label:"الرصيد الحالي",type:"currency"},{key:"is_active",label:"الحالة",type:"boolean-status"}],
-    fields:[{key:"name",label:"اسم الصندوق",type:"text",required:true},{key:"code",label:"رمز الصندوق",type:"text",required:true},{key:"branch_id",label:"الفرع",type:"relation",relation:{table:"branches",label:"name"},required:true},{key:"currency",label:"العملة",type:"select",default:"YER",options:[{value:"YER",label:"ريال يمني"},{value:"SAR",label:"ريال سعودي"},{value:"USD",label:"دولار"}]},{key:"opening_balance",label:"الرصيد الافتتاحي",type:"currency",default:0},{key:"responsible_name",label:"المسؤول",type:"text"},{key:"is_active",label:"الصندوق نشط",type:"switch",default:true},{key:"notes",label:"ملاحظات",type:"textarea",full:true}],actions:["view","edit","toggle","statement"]
+    fields:[{key:"name",label:"اسم الصندوق",type:"text",required:true},{key:"code",label:"رمز الصندوق - اختياري",type:"text",help:"إذا تركته فارغاً ينشئ النظام رمزاً فريداً تلقائياً."},{key:"branch_id",label:"الفرع",type:"relation",relation:{table:"branches",label:"name"},required:true},{key:"currency",label:"العملة",type:"select",default:"YER",options:[{value:"YER",label:"ريال يمني"},{value:"SAR",label:"ريال سعودي"},{value:"USD",label:"دولار"}]},{key:"opening_balance",label:"الرصيد الافتتاحي",type:"currency",default:0},{key:"responsible_name",label:"المسؤول",type:"text"},{key:"is_active",label:"الصندوق نشط",type:"switch",default:true},{key:"notes",label:"ملاحظات",type:"textarea",full:true}],actions:["view","edit","toggle","statement"]
   },
   cashbox_users: {
     title:"صلاحيات الصناديق",description:"تحديد المستخدمين والموزعين المسموح لهم بالقبض أو الصرف من كل صندوق.",table:"cashbox_users",icon:"fa-solid fa-key",singular:"صلاحية صندوق",primaryLabel:"إضافة صلاحية",
@@ -609,17 +653,13 @@ export const screenConfigs = {
     fields:[{key:"cashbox_id",label:"الصندوق",type:"relation",relation:{table:"cashboxes",label:"name"},required:true},{key:"user_id",label:"المستخدم",type:"relation",relation:{table:"profiles",label:"full_name"}},{key:"delegate_id",label:"الموزع",type:"relation",relation:{table:"delegates",label:"full_name"}},{key:"can_receive",label:"يسمح بالقبض",type:"switch",default:false},{key:"can_pay",label:"يسمح بالصرف",type:"switch",default:false},{key:"daily_limit",label:"حد الصرف اليومي",type:"currency",default:0},{key:"is_active",label:"نشط",type:"switch",default:true}],actions:["edit","toggle"]
   },
   cash_transfers: {
-    title:"التحويل بين الصناديق",description:"تحويل مبالغ بين الصناديق مع أثر تدقيقي ورقم مرجعي.",table:"cash_transfers",icon:"fa-solid fa-right-left",singular:"تحويل",primaryLabel:"تحويل جديد",
+    title:"التحويل بين الصناديق",description:"تحويل بين صندوقين نشطين من العملة نفسها؛ يفحص النظام الرصيد ويعرض سبب الرفض فوراً.",table:"cash_transfers",icon:"fa-solid fa-right-left",singular:"تحويل",primaryLabel:"تحويل جديد",
+    dateKey:"transfer_date",backdateRestricted:true,
     columns:[{key:"transfer_no",label:"رقم التحويل",type:"name",subKey:"transfer_date"},{key:"from_cashbox_name",label:"من صندوق"},{key:"to_cashbox_name",label:"إلى صندوق"},{key:"amount",label:"المبلغ",type:"currency"},{key:"status",label:"الحالة",type:"status"}],
-    fields:[{key:"transfer_date",label:"التاريخ",type:"date",required:true},{key:"from_cashbox_id",label:"من صندوق",type:"relation",relation:{table:"cashboxes",label:"name"},required:true},{key:"to_cashbox_id",label:"إلى صندوق",type:"relation",relation:{table:"cashboxes",label:"name"},required:true},{key:"amount",label:"المبلغ",type:"currency",required:true},{key:"status",label:"الحالة",type:"select",default:"draft",options:[{value:"draft",label:"مسودة"},{value:"posted",label:"مرحّل"},{value:"cancelled",label:"ملغي"}]},{key:"notes",label:"البيان",type:"textarea",full:true}],actions:["view","edit","post","print","cancel"]
-  },
-  delegate_advances: {
-    title:"عهد الموزعين النقدية",description:"تسليم مبالغ للموزعين ومراجعة ما تم صرفه والمتبقي والتسويات.",table:"delegate_advances",icon:"fa-solid fa-wallet",singular:"عهدة",primaryLabel:"تسليم عهدة",
-    columns:[{key:"advance_no",label:"رقم العهدة",type:"name",subKey:"advance_date"},{key:"delegate_name",label:"الموزع"},{key:"cashbox_name",label:"الصندوق"},{key:"amount",label:"المبلغ",type:"currency"},{key:"spent_amount",label:"المصروف",type:"currency"},{key:"remaining_amount",label:"المتبقي",type:"currency"},{key:"status",label:"الحالة",type:"status"}],
-    fields:[{key:"advance_date",label:"التاريخ",type:"date",required:true},{key:"delegate_id",label:"الموزع",type:"relation",relation:{table:"delegates",label:"full_name"},required:true},{key:"cashbox_id",label:"الصندوق",type:"relation",relation:{table:"cashboxes",label:"name"},required:true},{key:"amount",label:"مبلغ العهدة",type:"currency",required:true},{key:"notes",label:"البيان",type:"textarea",full:true}],actions:["view","edit","statement","post"]
+    fields:[{key:"transfer_date",label:"التاريخ",type:"date",required:true,default:"today"},{key:"from_cashbox_id",label:"من صندوق",type:"relation",relation:{table:"cashboxes",label:"name",filter:{is_active:true}},required:true},{key:"to_cashbox_id",label:"إلى صندوق",type:"relation",relation:{table:"cashboxes",label:"name",filter:{is_active:true}},required:true},{key:"amount",label:"المبلغ",type:"currency",required:true,min:1},{key:"status",label:"الحالة",type:"select",default:"draft",options:[{value:"draft",label:"مسودة"}]},{key:"notes",label:"البيان",type:"textarea",full:true}],actions:["view","edit","post","print","cancel"]
   },
   quick_delivery: {
-    title:"التسليم السريع للمستفيد",description:"اكتب اسم المستفيد والمبلغ فقط؛ يختار النظام الموزع تلقائياً ويرحّل العملية فوراً بعد فحص الرصيد.",table:"distribution_assignments",icon:"fa-solid fa-bolt",singular:"تسليم سريع",primaryLabel:"تسليم سريع",
+    title:"التسليم السريع للمستفيد",description:"بحث تلقائي للمستفيد مع إظهار الموزع والحملة والصندوق والعملة والرصيد المتاح قبل الترحيل.",table:"distribution_assignments",icon:"fa-solid fa-bolt",singular:"تسليم سريع",primaryLabel:"تسليم سريع",
     columns:[{key:"beneficiary_name",label:"المستفيد",type:"name",subKey:"phone"},{key:"delegate_name",label:"الموزع"},{key:"amount",label:"المبلغ",type:"currency"},{key:"delivery_status",label:"التسليم",type:"status"},{key:"delivered_at",label:"وقت التسليم",type:"datetime"}],fields:[{key:"beneficiary_name",label:"اسم المستفيد",type:"text",required:true},{key:"amount",label:"المبلغ",type:"currency",required:true,min:1}],actions:["view"]
   },
   wallet_providers: {
@@ -638,12 +678,14 @@ export const screenConfigs = {
     fields:[{key:"batch_id",label:"دفعة الصرف",type:"relation",relation:{table:"bulk_disbursements",label:"batch_no"},required:true},{key:"result_file",label:"ملف النتائج",type:"file",folder:"disbursement-results",full:true,required:true}],actions:["view","retry"]
   },
   units: {
-    title:"دليل الوحدات",description:"وحدات جاهزة مثل كيس وكرتون وقطعة وكيلو ولتر مع إمكانية الإضافة.",table:"units",icon:"fa-solid fa-ruler-combined",singular:"وحدة",primaryLabel:"إضافة وحدة",
-    columns:[{key:"name",label:"الوحدة",type:"name",subKey:"symbol"},{key:"unit_type",label:"النوع"},{key:"is_default",label:"افتراضية",type:"boolean"},{key:"is_active",label:"الحالة",type:"boolean-status"}],fields:[{key:"name",label:"اسم الوحدة",type:"text",required:true},{key:"symbol",label:"الرمز",type:"text"},{key:"unit_type",label:"نوع الوحدة",type:"select",options:[{value:"count",label:"عدد"},{value:"weight",label:"وزن"},{value:"volume",label:"حجم"}]},{key:"is_default",label:"وحدة جاهزة",type:"switch",default:false},{key:"is_active",label:"نشطة",type:"switch",default:true}],actions:["edit","toggle"]
+    title:"دليل الوحدات",description:"وحدات القياس المستخدمة للأصناف مثل كيس وكرتون وحبة وكيلوغرام ولتر.",table:"units",icon:"fa-solid fa-ruler-combined",singular:"وحدة",primaryLabel:"إضافة وحدة",
+    importable:true,dateKey:"created_at",
+    columns:[{key:"name",label:"الوحدة",type:"name",subKey:"symbol"},{key:"is_active",label:"الحالة",type:"boolean-status"}],fields:[{key:"name",label:"اسم الوحدة",type:"text",required:true},{key:"symbol",label:"الاختصار",type:"text"},{key:"is_active",label:"نشطة",type:"switch",default:true}],actions:["edit","toggle"]
   },
   warehouses: {
     title:"دليل المخازن",description:"تعريف المخزن وعنوانه والمسؤول عنه وربطه بالفرع.",table:"warehouses",icon:"fa-solid fa-warehouse",singular:"مخزن",primaryLabel:"إضافة مخزن",
-    columns:[{key:"name",label:"المخزن",type:"name",subKey:"code"},{key:"branch_name",label:"الفرع"},{key:"address",label:"العنوان"},{key:"manager_name",label:"المسؤول"},{key:"is_active",label:"الحالة",type:"boolean-status"}],fields:[{key:"name",label:"اسم المخزن",type:"text",required:true},{key:"code",label:"الرمز",type:"text",required:true},{key:"branch_id",label:"الفرع",type:"relation",relation:{table:"branches",label:"name"},required:true},{key:"address",label:"العنوان",type:"textarea",full:true,required:true},{key:"manager_name",label:"المسؤول الأول",type:"text",required:true},{key:"phone",label:"الهاتف",type:"tel"},{key:"is_active",label:"نشط",type:"switch",default:true}],actions:["view","edit","toggle"]
+    importable:true,dateKey:"created_at",
+    columns:[{key:"name",label:"المخزن",type:"name",subKey:"code"},{key:"branch_name",label:"الفرع"},{key:"address",label:"العنوان"},{key:"manager_name",label:"المسؤول"},{key:"is_active",label:"الحالة",type:"boolean-status"}],fields:[{key:"name",label:"اسم المخزن",type:"text",required:true},{key:"code",label:"الرمز - اختياري",type:"text",help:"إذا تركته فارغاً ينشئ النظام رمزاً فريداً تلقائياً."},{key:"branch_id",label:"الفرع",type:"relation",relation:{table:"branches",label:"name"},required:true},{key:"address",label:"العنوان",type:"textarea",full:true,required:true},{key:"manager_name",label:"المسؤول الأول",type:"text",required:true},{key:"phone",label:"الهاتف",type:"tel"},{key:"is_active",label:"نشط",type:"switch",default:true}],actions:["view","edit","toggle"]
   },
   stock_balances: {
     title:"أرصدة المخازن",description:"الرصيد الفعلي والمتاح والمحجوز والتالف لكل صنف ومخزن.",table:"stock_balances",icon:"fa-solid fa-layer-group",singular:"رصيد",primaryLabel:null,
@@ -658,12 +700,12 @@ export const screenConfigs = {
     columns:[{key:"name",label:"القالب",type:"name",subKey:"event_key"},{key:"channel",label:"القناة"},{key:"is_active",label:"الحالة",type:"boolean-status"},{key:"updated_at",label:"آخر تعديل",type:"datetime"}],fields:[{key:"name",label:"اسم القالب",type:"text",required:true},{key:"event_key",label:"مفتاح الحدث",type:"text",required:true},{key:"channel",label:"القناة",type:"select",options:[{value:"sms",label:"SMS"},{value:"whatsapp",label:"WhatsApp"}]},{key:"body",label:"نص القالب",type:"textarea",full:true,required:true},{key:"is_active",label:"نشط",type:"switch",default:true}],actions:["view","edit","toggle"]
   },
   imports: {
-    title:"الاستيراد من Excel",description:"استيراد بيانات أي نافذة مع نموذج أعمدة ومعاينة وفحص تكرار قبل الحفظ.",table:"import_jobs",icon:"fa-solid fa-file-import",singular:"عملية استيراد",primaryLabel:"استيراد ملف",
-    columns:[{key:"created_at",label:"التاريخ",type:"datetime"},{key:"target_name",label:"النافذة",type:"name",subKey:"file_name"},{key:"total_rows",label:"الصفوف",type:"number"},{key:"success_rows",label:"ناجحة",type:"number"},{key:"error_rows",label:"أخطاء",type:"number"},{key:"status",label:"الحالة",type:"status"}],fields:[{key:"target_table",label:"نافذة الإدخال",type:"select",required:true,options:[{value:"beneficiaries",label:"المستفيدون"},{value:"delegates",label:"الموزعون"},{value:"donors",label:"المتبرعون"},{value:"items",label:"الأصناف"},{value:"warehouses",label:"المخازن"}]},{key:"file",label:"ملف Excel أو CSV",type:"file",folder:"imports",full:true,required:true}],actions:["view","download-template"]
+    title:"الاستيراد من Excel",description:"تنزيل نموذج عربي، قراءة Excel/CSV داخل المتصفح، معاينة الأخطاء ثم استيراد الأدلة الأساسية مع تقرير نجاح وفشل.",table:"import_jobs",icon:"fa-solid fa-file-import",singular:"عملية استيراد",primaryLabel:"استيراد ملف",
+    columns:[{key:"created_at",label:"التاريخ",type:"datetime"},{key:"target_name",label:"النافذة",type:"name",subKey:"file_name"},{key:"total_rows",label:"الصفوف",type:"number"},{key:"success_rows",label:"ناجحة",type:"number"},{key:"error_rows",label:"أخطاء",type:"number"},{key:"status",label:"الحالة",type:"status"}],fields:[{key:"target_table",label:"نافذة الإدخال",type:"select",required:true,options:[{value:"beneficiaries",label:"المستفيدون"},{value:"delegates",label:"الموزعون"},{value:"donors",label:"المتبرعون"},{value:"beneficiary_categories",label:"فئات المستفيدين"},{value:"health_conditions",label:"الحالات الصحية"},{value:"items",label:"الأصناف"},{value:"units",label:"الوحدات"},{value:"branches",label:"الفروع"},{value:"cashboxes",label:"الصناديق"},{value:"warehouses",label:"المخازن"}]},{key:"file",label:"ملف Excel أو CSV",type:"file",folder:"imports",full:true,required:true}],actions:["view","download-template"]
   },
   closings: {
     title: "إقفال الحسابات",
-    description: "مراجعة المقبوضات والمصروفات والفروقات وتثبيت نتائج الحملة.",
+    description: "مراجعة تمويل الحملة ومصروفاتها ومخزونها وتخصيصات موزعيها قبل الإقفال.",
     table: "account_closings",
     icon: "fa-solid fa-file-circle-check",
     singular: "إقفال",
@@ -671,7 +713,7 @@ export const screenConfigs = {
     columns: [
       { key: "closing_no", label: "رقم الإقفال", type: "name", subKey: "closed_at" },
       { key: "campaign_name", label: "الحملة" },
-      { key: "total_received", label: "المقبوض", type: "currency" },
+      { key: "total_received", label: "التمويل المرحل", type: "currency" },
       { key: "total_spent", label: "المصروف", type: "currency" },
       { key: "balance", label: "المتبقي", type: "currency" },
       { key: "difference", label: "الفروقات", type: "currency" },
@@ -680,8 +722,6 @@ export const screenConfigs = {
     ],
     fields: [
       { key: "campaign_id", label: "الحملة", type: "relation", relation: { table: "campaigns", label: "name", filter: { status: "open" } }, required: true },
-      { key: "donor_id", label: "المتبرع - اختياري", type: "relation", relation: { table: "donors", label: "name" } },
-      { key: "cash_receipt_id", label: "سند القبض - اختياري", type: "relation", relation: { table: "cash_receipts", label: "voucher_no", filter: { status: "posted" } } },
       { key: "closing_type", label: "نوع الإقفال", type: "select", default: "full", options: [
         { value: "partial", label: "جزئي" }, { value: "full", label: "كامل" }
       ]},
@@ -713,14 +753,13 @@ export const screenConfigs = {
 export const reportDefinitions = [
   { id: "cashbox-balances", title: "أرصدة الصناديق", description: "الرصيد الافتتاحي والحركة والرصيد الحالي لكل صندوق.", icon: "fa-solid fa-vault", table: "cashboxes" },
   { id: "warehouse-balances", title: "أرصدة المخازن", description: "المتاح والمحجوز والتالف والحد الأدنى.", icon: "fa-solid fa-warehouse", table: "stock_balances" },
-  { id: "delegate-advances", title: "عهد الموزعين", description: "العهد والمصروف والمتبقي والتسويات.", icon: "fa-solid fa-wallet", table: "delegate_advances" },
   { id: "cash-donors", title: "تقرير المتبرعين النقدي", description: "المبالغ المقبوضة حسب المتبرع والحملة.", icon: "fa-solid fa-hand-holding-heart", table: "cash_receipts" },
   { id: "cash-beneficiaries", title: "تقرير المستفيدين النقدي", description: "المبالغ المصروفة للمستفيدين.", icon: "fa-solid fa-hand-holding-dollar", table: "cash_payments" },
   { id: "inkind-donors", title: "تقرير المتبرعين العيني", description: "الأصناف والكميات الواردة.", icon: "fa-solid fa-truck-ramp-box", table: "in_kind_receipts" },
   { id: "inkind-beneficiaries", title: "تقرير المستفيدين العيني", description: "السلال والأصناف المصروفة.", icon: "fa-solid fa-box-open", table: "in_kind_payments" },
   { id: "campaign-balances", title: "الحملات والأرصدة", description: "المقبوض والمصروف والمتبقي لكل حملة.", icon: "fa-solid fa-bullseye", table: "campaigns" },
   { id: "inventory-balances", title: "رصيد الأصناف", description: "المتاح والتالف والتنبيهات.", icon: "fa-solid fa-boxes-stacked", table: "items" },
-  { id: "delegate-balances", title: "أرصدة الموزعين", description: "الرصيد النقدي والعهدة العينية.", icon: "fa-solid fa-people-carry-box", table: "delegates" },
+  { id: "delegate-balances", title: "أرصدة الموزعين", description: "حدود الصرف المخصصة والمصروف ومخزون الموزعين.", icon: "fa-solid fa-people-carry-box", table: "delegates" },
   { id: "duplicates", title: "المستفيدون المكررون", description: "حالات التشابه والهوية والهاتف.", icon: "fa-solid fa-clone", table: "beneficiaries" },
   { id: "closings", title: "تقرير الإقفال", description: "الفروقات والإقفالات الكاملة والجزئية.", icon: "fa-solid fa-file-circle-check", table: "account_closings" },
   { id: "audit-sync", title: "التدقيق والمزامنة", description: "العمليات الحساسة وحالة المزامنة.", icon: "fa-solid fa-clock-rotate-left", table: "audit_logs" }

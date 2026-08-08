@@ -1,10 +1,12 @@
-import { createClient } from "https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm";
+import { getDeviceFingerprint } from "./device-identity.js";
 
 const config = window.ZAKAT_CONFIG || {};
 export const isSupabaseConfigured = Boolean(config.supabaseUrl && config.supabaseAnonKey && !config.demoMode);
 
-export const supabase = isSupabaseConfigured
-  ? createClient(config.supabaseUrl, config.supabaseAnonKey, {
+let client = null;
+if (isSupabaseConfigured) {
+  const { createClient } = await import("https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.112.2/+esm");
+  client = createClient(config.supabaseUrl, config.supabaseAnonKey, {
       auth: {
         persistSession: true,
         autoRefreshToken: true,
@@ -12,10 +14,14 @@ export const supabase = isSupabaseConfigured
         storageKey: "zakat-auth"
       },
       global: {
-        headers: { "x-client-info": "zakat-management-static/1.0" }
+        headers: {
+          "x-client-info": "zakat-management-static/11.2",
+          "x-device-fingerprint": getDeviceFingerprint()
+        }
       }
-    })
-  : null;
+    });
+}
+export const supabase = client;
 
 export async function getCurrentSession() {
   if (!supabase) return null;
