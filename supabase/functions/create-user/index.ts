@@ -1,8 +1,8 @@
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.112.2";
 
 const cors = {
   "Access-Control-Allow-Origin": "*",
-  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
+  "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, x-device-fingerprint",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
 };
 
@@ -47,10 +47,22 @@ Deno.serve(async (req) => {
     const { data: me, error: meError } = await caller.auth.getUser();
     if (meError || !me.user) return json({ error: "الجلسة غير صالحة." }, 401);
 
+    const fingerprint = String(req.headers.get("x-device-fingerprint") ?? "").trim();
+    if (!fingerprint) return json({ error: "بصمة الجهاز مطلوبة." }, 403);
+    const { data: approvedDevice, error: deviceError } = await admin
+      .from("authorized_devices")
+      .select("id")
+      .eq("user_id", me.user.id)
+      .eq("fingerprint", fingerprint)
+      .eq("status", "approved")
+      .eq("is_active", true)
+      .maybeSingle();
+    if (deviceError || !approvedDevice) return json({ error: "هذا الجهاز غير معتمد لتنفيذ العملية." }, 403);
+
     const { data: profile, error: profileReadError } = await admin
-      .from("profiles").select("role,is_active").eq("id", me.user.id).maybeSingle();
+      .from("profiles").select("role,is_active,status,expires_at").eq("id", me.user.id).maybeSingle();
     if (profileReadError) return json({ error: "تعذر التحقق من صلاحيات المستخدم." }, 500);
-    if (!profile?.is_active || !["admin", "super_admin"].includes(String(profile.role))) {
+    if (!profile?.is_active || profile.status !== "active" || profile.role !== "admin" || (profile.expires_at && profile.expires_at < new Date().toISOString().slice(0, 10))) {
       return json({ error: "لا تملك صلاحية إنشاء المستخدمين." }, 403);
     }
 
@@ -60,10 +72,12 @@ Deno.serve(async (req) => {
     const fullName = String(body.full_name ?? "").trim();
     const username = String(body.username ?? phone.slice(-9)).trim();
     const role = String(body.role ?? "data_entry");
+    const allowedRoles = new Set(["admin", "supervisor", "accountant", "distributor", "data_entry", "warehouse", "auditor"]);
 
     if (!/^\+967\d{9}$/.test(phone)) return json({ error: "رقم الهاتف اليمني غير صالح." }, 400);
     if (password.length < 8) return json({ error: "كلمة المرور يجب ألا تقل عن 8 أحرف." }, 400);
     if (!fullName) return json({ error: "اسم المستخدم مطلوب." }, 400);
+    if (!allowedRoles.has(role)) return json({ error: "الدور الوظيفي غير صالح." }, 400);
 
     const { data: exists } = await admin.from("profiles").select("id").eq("phone", phone).maybeSingle();
     if (exists) return json({ error: "رقم الهاتف مستخدم مسبقاً." }, 409);
@@ -99,6 +113,17 @@ Deno.serve(async (req) => {
       await admin.auth.admin.deleteUser(data.user.id);
       return json({ error: "تم التراجع عن الإنشاء لأن حفظ الملف الوظيفي فشل.", details: saveError.message }, 500);
     }
+
+    const { error: auditError } = await admin.from("audit_logs").insert({
+      user_id: me.user.id,
+      action: "create_user",
+      table_name: "profiles",
+      record_id: data.user.id,
+      new_data: { full_name: fullName, phone, username, role, branch_id: body.branch_id || null },
+      session_info: { device_fingerprint: fingerprint, source: "create-user-edge-function" },
+      result: "success",
+    });
+    if (auditError) console.error("تعذر تسجيل تدقيق إنشاء المستخدم", auditError);
 
     return json({ success: true, user_id: data.user.id, phone, message: "تم إنشاء المستخدم بنجاح دون SMS أو OTP." }, 201);
   } catch (error) {
