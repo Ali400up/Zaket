@@ -1,4 +1,12 @@
 -- =============================================================
+-- نظام إدارة الزكاة والتبرعات V11.2.0
+-- ملف قاعدة البيانات الكامل والوحيد
+-- يشمل المخطط الأساسي، تحسينات ملاحظات الإدارة، والقواعد المالية النهائية.
+-- ينتهي الملف بحذف الوحدة النقدية القديمة للموزع واعتماد تخصيصات الحملات فقط.
+-- =============================================================
+
+-- القسم 1: المخطط الأساسي
+-- =============================================================
 -- نظام إدارة الزكاة والتبرعات - مخطط Supabase / PostgreSQL
 -- يشمل الجداول، العلاقات، RLS، العروض، التدقيق، والترحيل الآمن.
 -- نفّذ الملف في Supabase SQL Editor على مشروع جديد.
@@ -845,7 +853,6 @@ DROP VIEW IF EXISTS
   public.v_cashboxes,
   public.v_cashbox_users,
   public.v_cash_transfers,
-  public.v_delegate_advances,
   public.v_authorized_devices,
   public.v_user_sessions,
   public.v_user_archives,
@@ -1104,7 +1111,6 @@ create table if not exists public.branches (id uuid primary key default gen_rand
 create table if not exists public.cashboxes (id uuid primary key default gen_random_uuid(), branch_id uuid references public.branches(id), name text not null, code text unique not null, currency text default 'YER', opening_balance numeric(18,2) default 0, current_balance numeric(18,2) default 0, responsible_name text, is_active boolean default true, notes text, created_at timestamptz default now(), updated_at timestamptz default now());
 create table if not exists public.cashbox_users (id uuid primary key default gen_random_uuid(), cashbox_id uuid references public.cashboxes(id) on delete cascade, user_id uuid references public.profiles(id), delegate_id uuid references public.delegates(id), can_receive boolean default false, can_pay boolean default false, daily_limit numeric(18,2) default 0, is_active boolean default true, unique(cashbox_id,user_id,delegate_id));
 create table if not exists public.cash_transfers (id uuid primary key default gen_random_uuid(), transfer_no text unique not null, transfer_date date not null, from_cashbox_id uuid references public.cashboxes(id), to_cashbox_id uuid references public.cashboxes(id), amount numeric(18,2) check(amount>0), currency text default 'YER', status text default 'draft', notes text, created_by uuid references public.profiles(id), created_at timestamptz default now());
-create table if not exists public.delegate_advances (id uuid primary key default gen_random_uuid(), advance_no text unique not null, advance_date date not null, delegate_id uuid references public.delegates(id), cashbox_id uuid references public.cashboxes(id), amount numeric(18,2) check(amount>0), spent_amount numeric(18,2) default 0, remaining_amount numeric(18,2) generated always as (amount-spent_amount) stored, status text default 'open', notes text, created_at timestamptz default now());
 create table if not exists public.authorized_devices (
   id uuid primary key default gen_random_uuid(),
   user_id uuid references public.profiles(id),
@@ -1257,11 +1263,6 @@ create or replace view public.v_cash_transfers with (security_invoker=true) as
 select t.*, f.name from_cashbox_name, x.name to_cashbox_name,
  lower(concat_ws(' ',t.transfer_no,f.name,x.name,t.status,t.notes)) search_text
 from public.cash_transfers t join public.cashboxes f on f.id=t.from_cashbox_id join public.cashboxes x on x.id=t.to_cashbox_id;
-
-create or replace view public.v_delegate_advances with (security_invoker=true) as
-select a.*, d.full_name delegate_name, b.name cashbox_name,
- lower(concat_ws(' ',a.advance_no,d.full_name,b.name,a.status,a.notes)) search_text
-from public.delegate_advances a join public.delegates d on d.id=a.delegate_id join public.cashboxes b on b.id=a.cashbox_id;
 
 create or replace view public.v_authorized_devices with (security_invoker=true) as
 select d.*, p.full_name user_name,
@@ -1416,7 +1417,7 @@ create policy authenticated_manage_campaign_funding on public.campaign_funding f
 drop policy if exists authenticated_manage_campaign_distributors on public.campaign_distributors;
 create policy authenticated_manage_campaign_distributors on public.campaign_distributors for all to authenticated using (true) with check (true);
 
-grant select on public.cashbox_balances,public.campaign_balances,public.v_cashboxes,public.v_cashbox_users,public.v_cash_transfers,public.v_delegate_advances,public.v_authorized_devices,public.v_user_sessions,public.v_user_archives,public.v_warehouses,public.v_stock_balances,public.v_bulk_disbursements,public.v_disbursement_results,public.v_distribution_assignments,public.v_campaign_funding,public.v_campaign_distributors to authenticated;
+grant select on public.cashbox_balances,public.campaign_balances,public.v_cashboxes,public.v_cashbox_users,public.v_cash_transfers,public.v_authorized_devices,public.v_user_sessions,public.v_user_archives,public.v_warehouses,public.v_stock_balances,public.v_bulk_disbursements,public.v_disbursement_results,public.v_distribution_assignments,public.v_campaign_funding,public.v_campaign_distributors to authenticated;
 grant select on public.cashbox_ledger to authenticated;
 grant select,insert,update on public.campaign_funding,public.campaign_distributors to authenticated;
 grant execute on function public.post_campaign_funding(uuid) to authenticated;
@@ -1552,7 +1553,6 @@ DECLARE
     'cashboxes',
     'cashbox_users',
     'cash_transfers',
-    'delegate_advances',
     'authorized_devices',
     'user_sessions',
     'user_archives',
@@ -1618,7 +1618,7 @@ DO $$
 DECLARE
   t text;
   target_tables text[] := ARRAY[
-    'branches','cashboxes','cashbox_users','cash_transfers','delegate_advances',
+    'branches','cashboxes','cashbox_users','cash_transfers',
     'authorized_devices','user_sessions','user_archives','login_attempts',
     'wallet_providers','bulk_disbursements','disbursement_results',
     'distribution_assignments','warehouses','units','stock_balances',
@@ -1646,7 +1646,7 @@ AS $$
   WITH required(table_name) AS (
     VALUES
       ('branches'),('cashboxes'),('cashbox_users'),('cash_transfers'),
-      ('delegate_advances'),('authorized_devices'),('user_sessions'),
+      ('authorized_devices'),('user_sessions'),
       ('user_archives'),('login_attempts'),('wallet_providers'),
       ('bulk_disbursements'),('disbursement_results'),
       ('distribution_assignments'),('warehouses'),('units'),
@@ -1746,6 +1746,7 @@ begin
   return r;
 end $$;
 
+/* V11.2 removes the obsolete distributor-advance payment model.
 -- Cash payment checks the actual cashbox balance and distributor balance. Zero/insufficient balance is rejected.
 create or replace function public.post_cash_payment(p_id uuid)
 returns public.cash_payments language plpgsql security definer set search_path=public as $$
@@ -1800,6 +1801,7 @@ begin
   return (select x from public.cash_payments x where x.id=v_payment);
 end $$;
 grant execute on function public.quick_deliver_cash(text,numeric) to authenticated;
+*/
 
 
 -- V9 BUSINESS RULES
@@ -1876,6 +1878,7 @@ begin
   return r;
 end $$;
 
+/* V11.2 removes the duplicate obsolete distributor-advance payment model.
 -- Cash payment checks the actual cashbox balance and distributor balance. Zero/insufficient balance is rejected.
 create or replace function public.post_cash_payment(p_id uuid)
 returns public.cash_payments language plpgsql security definer set search_path=public as $$
@@ -1932,6 +1935,7 @@ begin
   return (select x from public.cash_payments x where x.id=v_payment);
 end $$;
 grant execute on function public.quick_deliver_cash(text,numeric) to authenticated;
+*/
 
 
 
@@ -1963,6 +1967,7 @@ begin
 end $$;
 grant execute on function public.post_cash_receipt(uuid) to authenticated;
 
+/* V11.2 removes the obsolete advance-based quick-delivery implementation.
 -- Quick delivery supports scoped beneficiary selection:
 -- distributor: only linked beneficiaries (RLS + validation)
 -- management: any beneficiary, using that beneficiary's linked distributor.
@@ -2059,6 +2064,7 @@ begin
   return (select x from public.cash_payments x where x.id=v_payment);
 end $$;
 grant execute on function public.quick_deliver_cash(text,numeric,uuid) to authenticated;
+*/
 
 
 -- V9.1: القبض العيني يدخل المخزن أولاً، ثم تمويل عيني مستقل يخصص الأصناف للحملة.
@@ -2227,6 +2233,7 @@ GRANT EXECUTE ON FUNCTION public.post_campaign_in_kind_funding(uuid) TO authenti
 UPDATE public.system_installation SET version='9.1.0',installed_at=now() WHERE id=1;
 
 
+/* V11.2 removes the last obsolete advance-based quick-delivery implementation.
 -- V9.3: quick delivery only for an existing approved beneficiary.
 drop function if exists public.quick_deliver_cash(text,numeric);
 drop function if exists public.quick_deliver_cash(text,numeric,uuid);
@@ -2311,6 +2318,7 @@ end $$;
 grant execute on function public.quick_deliver_cash(text,numeric,uuid) to authenticated;
 
 UPDATE public.system_installation SET version='9.3.0',installed_at=now() WHERE id=1;
+*/
 
 
 -- V10: offline, automatic posting, devices and login attempts
@@ -2407,6 +2415,7 @@ notify pgrst, 'reload schema';
 -- V11 RC6 FINANCIAL CONSISTENCY PATCH
 -- =============================================================
 
+/* V11.2 removes the legacy distributor-advance table and its number generator.
 -- Numbers are generated by the database so the UI never has to supply them.
 alter table public.delegate_advances
   alter column advance_no set default (
@@ -2418,6 +2427,7 @@ set advance_no = 'DA-' || to_char(coalesce(created_at,now()),'YYYYMMDDHH24MISSMS
 where advance_no is null or btrim(advance_no)='';
 
 alter table public.delegate_advances alter column advance_no set not null;
+*/
 
 -- Receipt/payment views must not hide records when optional campaign/delegate/receipt links are null.
 drop view if exists public.v_cash_receipts cascade;
@@ -2444,6 +2454,7 @@ left join public.cashboxes bx on bx.id=p.cashbox_id;
 
 grant select on public.v_cash_receipts, public.v_cash_payments to authenticated;
 
+/* V11.2 removes the obsolete distributor-advance posting and payment functions.
 -- Post a distributor advance exactly once and reject insufficient cashbox balance.
 drop function if exists public.post_delegate_advance(uuid);
 create function public.post_delegate_advance(p_id uuid)
@@ -2555,6 +2566,7 @@ begin
   return p;
 end $$;
 grant execute on function public.post_cash_payment(uuid) to authenticated;
+*/
 
 -- Settings are saved through one controlled RPC to avoid view/RLS/schema-cache mismatches.
 drop function if exists public.save_system_settings(jsonb);
@@ -2870,3 +2882,2065 @@ GRANT EXECUTE ON FUNCTION public.cancel_cash_payment(uuid,text) TO authenticated
 GRANT EXECUTE ON FUNCTION public.post_in_kind_payment(uuid) TO authenticated;
 
 NOTIFY pgrst,'reload schema';
+
+-- =============================================================
+-- القسم 2: حقول ومراقبة ومتطلبات ملاحظات الإدارة
+-- =============================================================
+-- Zakat System V11.1.0 — Manager Notes upgrade
+-- Run after supabase/database_complete.sql on existing or fresh installations.
+-- The migration is transactional and can be re-run safely.
+
+BEGIN;
+
+-- Extended party and beneficiary data.
+ALTER TABLE public.delegates DROP CONSTRAINT IF EXISTS delegates_phone_not_null;
+ALTER TABLE public.delegates ALTER COLUMN phone DROP NOT NULL;
+ALTER TABLE public.delegates ADD COLUMN IF NOT EXISTS phone_secondary text;
+ALTER TABLE public.delegates ADD COLUMN IF NOT EXISTS address text;
+ALTER TABLE public.delegates ADD COLUMN IF NOT EXISTS profile_image_url text;
+ALTER TABLE public.delegates ADD COLUMN IF NOT EXISTS identity_image_url text;
+
+ALTER TABLE public.donors ADD COLUMN IF NOT EXISTS phone_secondary text;
+ALTER TABLE public.donors ADD COLUMN IF NOT EXISTS address text;
+ALTER TABLE public.donors ADD COLUMN IF NOT EXISTS representative_name text;
+ALTER TABLE public.donors ADD COLUMN IF NOT EXISTS representative_phone text;
+
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS phone_secondary text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS birth_date date;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS governorate text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS district text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS village text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS address text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS guardian_name text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS housing_status text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS monthly_income numeric(18,2) CHECK (monthly_income IS NULL OR monthly_income >= 0);
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS profile_image_url text;
+ALTER TABLE public.beneficiaries ADD COLUMN IF NOT EXISTS identity_image_url text;
+
+ALTER TABLE public.system_settings ADD COLUMN IF NOT EXISTS require_device_authorization boolean NOT NULL DEFAULT true;
+UPDATE public.system_settings SET require_device_authorization=true WHERE id=1;
+
+ALTER TABLE public.campaign_funding ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;
+ALTER TABLE public.campaign_funding ADD COLUMN IF NOT EXISTS cancellation_reason text;
+
+-- Device identity is sent as a custom Data API header. Role helpers deny
+-- privileged database operations until that exact local device is approved.
+CREATE OR REPLACE FUNCTION public.raw_current_user_role()
+RETURNS public.app_role LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT role FROM public.profiles
+  WHERE id=auth.uid() AND is_active=true AND COALESCE(status,'active')='active'
+    AND (expires_at IS NULL OR expires_at>=current_date)
+$$;
+
+CREATE OR REPLACE FUNCTION public.has_authorized_device()
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT auth.uid() IS NOT NULL AND EXISTS(
+    SELECT 1 FROM public.authorized_devices d
+    WHERE d.user_id=auth.uid() AND d.status='approved' AND d.is_active=true
+      AND d.fingerprint=(COALESCE(NULLIF(current_setting('request.headers',true),''),'{}')::jsonb->>'x-device-fingerprint')
+  )
+$$;
+
+CREATE OR REPLACE FUNCTION public.current_user_role()
+RETURNS public.app_role LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT CASE WHEN public.has_authorized_device() THEN public.raw_current_user_role() ELSE NULL::public.app_role END
+$$;
+
+CREATE OR REPLACE FUNCTION public.has_role(allowed public.app_role[])
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT COALESCE(public.current_user_role()=ANY(allowed),false)
+$$;
+
+CREATE OR REPLACE FUNCTION public.current_delegate_id()
+RETURNS uuid LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT d.id FROM public.delegates d
+  WHERE public.has_authorized_device() AND d.profile_id=auth.uid() AND d.is_active=true
+  ORDER BY d.created_at LIMIT 1
+$$;
+
+CREATE OR REPLACE FUNCTION public.is_active_admin()
+RETURNS boolean LANGUAGE sql STABLE SECURITY DEFINER SET search_path=public AS $$
+  SELECT public.has_authorized_device() AND public.raw_current_user_role()='admin'
+$$;
+
+CREATE OR REPLACE FUNCTION public.enforce_approved_device()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_path text:=trim(both '/' FROM COALESCE(current_setting('request.path',true),''));
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN; END IF;
+  IF v_path IN ('rpc/request_device_authorization','login_attempts') THEN RETURN; END IF;
+  IF NOT public.has_authorized_device() THEN
+    RAISE EXCEPTION 'هذا الجهاز غير معتمد لاستخدام النظام';
+  END IF;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.fill_delegate_from_profile()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE p public.profiles%ROWTYPE;
+BEGIN
+  IF NEW.profile_id IS NOT NULL THEN
+    SELECT * INTO p FROM public.profiles WHERE id=NEW.profile_id;
+    IF NOT FOUND THEN RAISE EXCEPTION 'حساب المستخدم المرتبط غير موجود'; END IF;
+    NEW.full_name:=COALESCE(NULLIF(NEW.full_name,''),p.full_name);
+    NEW.phone:=COALESCE(NULLIF(NEW.phone,''),p.phone);
+  END IF;
+  IF NULLIF(trim(NEW.full_name),'') IS NULL THEN RAISE EXCEPTION 'اسم الموزع مطلوب'; END IF;
+  IF NEW.profile_id IS NULL AND NULLIF(trim(NEW.phone),'') IS NULL THEN RAISE EXCEPTION 'الهاتف مطلوب عند عدم ربط حساب مستخدم'; END IF;
+  RETURN NEW;
+END; $$;
+DROP TRIGGER IF EXISTS fill_delegate_from_profile_trigger ON public.delegates;
+CREATE TRIGGER fill_delegate_from_profile_trigger BEFORE INSERT OR UPDATE OF profile_id,full_name,phone ON public.delegates
+FOR EACH ROW EXECUTE FUNCTION public.fill_delegate_from_profile();
+
+-- Safe auth trigger: role never comes from editable raw_user_meta_data.
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+DROP FUNCTION IF EXISTS public.handle_new_auth_user();
+CREATE FUNCTION public.handle_new_auth_user()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  INSERT INTO public.profiles(id,full_name,username,email,phone,role,status)
+  VALUES(
+    NEW.id,
+    COALESCE(NULLIF(NEW.raw_user_meta_data->>'full_name',''),split_part(COALESCE(NEW.email,'user'),'@',1)),
+    COALESCE(NULLIF(NEW.raw_user_meta_data->>'username',''),split_part(COALESCE(NEW.email,NEW.id::text),'@',1)||'_'||substr(NEW.id::text,1,6)),
+    NEW.email,NULLIF(NEW.raw_user_meta_data->>'phone',''),'data_entry'::public.app_role,'active'
+  )
+  ON CONFLICT(id) DO UPDATE SET full_name=excluded.full_name,phone=COALESCE(excluded.phone,public.profiles.phone),email=excluded.email;
+  RETURN NEW;
+END; $$;
+CREATE TRIGGER on_auth_user_created AFTER INSERT ON auth.users FOR EACH ROW EXECUTE FUNCTION public.handle_new_auth_user();
+
+-- Device authorization. Authentication alone is not enough to enter the app.
+DROP FUNCTION IF EXISTS public.request_device_authorization(text,text,text);
+CREATE FUNCTION public.request_device_authorization(p_fingerprint text,p_device_name text,p_platform text)
+RETURNS TABLE(device_id uuid,status text)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE d public.authorized_devices%ROWTYPE; v_required boolean; v_bootstrap_admin boolean;
+BEGIN
+  IF auth.uid() IS NULL THEN RAISE EXCEPTION 'يجب تسجيل الدخول أولاً'; END IF;
+  IF public.raw_current_user_role() IS NULL THEN RAISE EXCEPTION 'الحساب موقوف أو منتهي الصلاحية'; END IF;
+  IF NULLIF(trim(p_fingerprint),'') IS NULL THEN RAISE EXCEPTION 'بصمة الجهاز مطلوبة'; END IF;
+  SELECT * INTO d FROM public.authorized_devices WHERE fingerprint=p_fingerprint FOR UPDATE;
+  IF FOUND AND d.user_id IS DISTINCT FROM auth.uid() THEN RAISE EXCEPTION 'بصمة الجهاز مرتبطة بمستخدم آخر'; END IF;
+  SELECT COALESCE(require_device_authorization,true) INTO v_required FROM public.system_settings WHERE id=1;
+  IF NOT FOUND THEN v_required:=true; END IF;
+  IF d.id IS NULL THEN
+    -- Avoid a deadlock on a fresh installation: the first active administrator
+    -- device is approved automatically; every later device follows the policy.
+    SELECT public.raw_current_user_role()='admin'
+       AND NOT EXISTS(SELECT 1 FROM public.authorized_devices ad0)
+      INTO v_bootstrap_admin;
+    INSERT INTO public.authorized_devices(user_id,device_name,fingerprint,platform,status,is_active,last_seen_at)
+    VALUES(
+      auth.uid(),COALESCE(NULLIF(trim(p_device_name),''),'جهاز ويب'),p_fingerprint,p_platform,
+      CASE WHEN v_bootstrap_admin OR NOT v_required THEN 'approved' ELSE 'pending' END,
+      v_bootstrap_admin OR NOT v_required,now()
+    )
+    RETURNING * INTO d;
+  ELSE
+    UPDATE public.authorized_devices ad SET device_name=COALESCE(NULLIF(trim(p_device_name),''),ad.device_name),platform=COALESCE(p_platform,ad.platform),last_seen_at=now(),is_active=(ad.status='approved') WHERE ad.id=d.id RETURNING * INTO d;
+  END IF;
+  RETURN QUERY SELECT d.id,d.status;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.open_user_session(text,text);
+CREATE FUNCTION public.open_user_session(p_fingerprint text,p_device_name text)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE d public.authorized_devices%ROWTYPE; v_id uuid; v_branch uuid;
+BEGIN
+  SELECT * INTO d FROM public.authorized_devices WHERE fingerprint=p_fingerprint AND user_id=auth.uid() AND status='approved' AND is_active=true;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الجهاز غير معتمد'; END IF;
+  SELECT branch_id INTO v_branch FROM public.profiles WHERE id=auth.uid();
+  UPDATE public.user_sessions SET status='inactive',logout_at=COALESCE(logout_at,now()) WHERE user_id=auth.uid() AND status='active';
+  INSERT INTO public.user_sessions(user_id,device_id,branch_id,login_at,last_activity_at,status)
+  VALUES(auth.uid(),d.id,v_branch,now(),now(),'active') RETURNING id INTO v_id;
+  RETURN v_id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.close_user_session(uuid);
+CREATE FUNCTION public.close_user_session(p_session_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  UPDATE public.user_sessions SET status='inactive',logout_at=now(),last_activity_at=now() WHERE id=p_session_id AND user_id=auth.uid();
+END; $$;
+
+DROP FUNCTION IF EXISTS public.touch_user_session(uuid);
+CREATE FUNCTION public.touch_user_session(p_session_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  UPDATE public.user_sessions
+  SET last_activity_at=now()
+  WHERE id=p_session_id AND user_id=auth.uid() AND status='active';
+  IF NOT FOUND THEN RAISE EXCEPTION 'جلسة المستخدم غير نشطة'; END IF;
+END; $$;
+
+-- Backdated vouchers require a privileged role. The UI displays a warning; this trigger enforces it.
+CREATE OR REPLACE FUNCTION public.enforce_backdated_document()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_date date;
+BEGIN
+  v_date:=NULLIF(to_jsonb(NEW)->>TG_ARGV[0],'')::date;
+  IF v_date < current_date AND NOT public.has_role(ARRAY['admin','supervisor']::public.app_role[]) THEN
+    RAISE EXCEPTION 'التسجيل بتاريخ سابق متاح للمدير أو المشرف فقط';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+DO $$ DECLARE x record;
+BEGIN
+  FOR x IN SELECT * FROM (VALUES
+    ('cash_receipts','receipt_date'),('cash_payments','payment_date'),('cash_transfers','transfer_date'),
+    ('campaign_funding','funding_date'),('in_kind_receipts','receipt_date'),
+    ('campaign_in_kind_funding','funding_date'),('in_kind_payments','payment_date')
+  ) AS t(table_name,date_column)
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS enforce_backdate ON public.%I',x.table_name);
+    EXECUTE format('CREATE TRIGGER enforce_backdate BEFORE INSERT OR UPDATE OF %I ON public.%I FOR EACH ROW EXECUTE FUNCTION public.enforce_backdated_document(%L)',x.date_column,x.table_name,x.date_column);
+  END LOOP;
+END $$;
+
+-- Transfers now lock both boxes and return precise validation messages.
+DROP FUNCTION IF EXISTS public.post_cash_transfer(uuid);
+CREATE FUNCTION public.post_cash_transfer(p_transfer_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v public.cash_transfers%ROWTYPE; v_from public.cashboxes%ROWTYPE; v_to public.cashboxes%ROWTYPE; v_balance numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN RAISE EXCEPTION 'غير مصرح بترحيل التحويل'; END IF;
+  SELECT * INTO v FROM public.cash_transfers WHERE id=p_transfer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'التحويل غير موجود'; END IF;
+  IF v.status='posted' THEN RETURN; END IF;
+  IF v.status<>'draft' THEN RAISE EXCEPTION 'لا يمكن ترحيل تحويل حالته %',v.status; END IF;
+  IF v.amount IS NULL OR v.amount<=0 THEN RAISE EXCEPTION 'مبلغ التحويل يجب أن يكون أكبر من صفر'; END IF;
+  IF v.from_cashbox_id=v.to_cashbox_id THEN RAISE EXCEPTION 'لا يمكن التحويل إلى نفس الصندوق'; END IF;
+  PERFORM id FROM public.cashboxes WHERE id IN(v.from_cashbox_id,v.to_cashbox_id) ORDER BY id FOR UPDATE;
+  SELECT * INTO v_from FROM public.cashboxes WHERE id=v.from_cashbox_id;
+  SELECT * INTO v_to FROM public.cashboxes WHERE id=v.to_cashbox_id;
+  IF v_from.id IS NULL THEN RAISE EXCEPTION 'الصندوق المصدر غير موجود'; END IF;
+  IF v_to.id IS NULL THEN RAISE EXCEPTION 'الصندوق الهدف غير موجود'; END IF;
+  IF NOT v_from.is_active THEN RAISE EXCEPTION 'الصندوق المصدر موقوف'; END IF;
+  IF NOT v_to.is_active THEN RAISE EXCEPTION 'الصندوق الهدف موقوف'; END IF;
+  IF v_from.currency<>v_to.currency THEN RAISE EXCEPTION 'لا يمكن التحويل بين عملتين مختلفتين (% و%)',v_from.currency,v_to.currency; END IF;
+  SELECT current_balance INTO v_balance FROM public.v_cashboxes WHERE id=v_from.id;
+  IF COALESCE(v_balance,0)<v.amount THEN RAISE EXCEPTION 'رصيد الصندوق المصدر غير كافٍ. المتاح % والمطلوب %',COALESCE(v_balance,0),v.amount; END IF;
+  UPDATE public.cash_transfers SET currency=v_from.currency WHERE id=v.id;
+  INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+  VALUES(v.from_cashbox_id,'transfer_out','cash_transfers',v.id,v.amount,0,v_from.currency,'تحويل صادر - '||v.transfer_no,auth.uid()) ON CONFLICT DO NOTHING;
+  INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+  VALUES(v.to_cashbox_id,'transfer_in','cash_transfers',v.id,0,v.amount,v_to.currency,'تحويل وارد - '||v.transfer_no,auth.uid()) ON CONFLICT DO NOTHING;
+  UPDATE public.cash_transfers SET status='posted' WHERE id=v.id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_campaign_funding(uuid,text);
+CREATE FUNCTION public.cancel_campaign_funding(p_id uuid,p_reason text)
+RETURNS public.campaign_funding LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE f public.campaign_funding; v_operational numeric(18,2); v_other_funding numeric(18,2); v_committed numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN RAISE EXCEPTION 'غير مصرح بإلغاء تمويل الحملة'; END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO f FROM public.campaign_funding WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'تمويل الحملة غير موجود'; END IF;
+  IF f.status='cancelled' THEN RETURN f; END IF;
+  IF f.status='posted' THEN
+    SELECT COALESCE(operational_balance,0) INTO v_operational FROM public.campaign_balances WHERE id=f.campaign_id;
+    IF v_operational<f.amount THEN RAISE EXCEPTION 'لا يمكن الإلغاء لأن جزءاً من هذا التمويل صُرف بالفعل'; END IF;
+    SELECT COALESCE(SUM(amount),0) INTO v_other_funding FROM public.campaign_funding WHERE campaign_id=f.campaign_id AND status='posted' AND id<>f.id;
+    SELECT COALESCE(SUM(allocated_amount-returned_amount),0) INTO v_committed FROM public.campaign_distributors WHERE campaign_id=f.campaign_id;
+    IF v_other_funding<v_committed THEN RAISE EXCEPTION 'لا يمكن الإلغاء قبل تخفيض أو تسوية تخصيصات الموزعين'; END IF;
+    INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+    VALUES(f.cashbox_id,'refund','campaign_funding',f.id,0,f.amount,f.currency,'عكس تمويل حملة - '||f.funding_no,auth.uid()) ON CONFLICT DO NOTHING;
+  END IF;
+  UPDATE public.campaign_funding SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now() WHERE id=f.id RETURNING * INTO f;
+  RETURN f;
+END; $$;
+
+-- Quick-delivery context used by autocomplete before posting.
+DROP FUNCTION IF EXISTS public.get_quick_delivery_context(uuid);
+CREATE FUNCTION public.get_quick_delivery_context(p_beneficiary_id uuid)
+RETURNS TABLE(beneficiary_id uuid,delegate_id uuid,delegate_name text,campaign_id uuid,campaign_name text,cashbox_id uuid,cashbox_name text,currency text,available_amount numeric,assignment_id uuid)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_role public.app_role; v_delegate uuid;
+BEGIN
+  v_role:=public.current_user_role();
+  IF v_role NOT IN ('admin','supervisor','accountant','distributor') THEN RAISE EXCEPTION 'غير مصرح بالتسليم السريع'; END IF;
+  SELECT b.delegate_id INTO v_delegate FROM public.beneficiaries b WHERE b.id=p_beneficiary_id AND b.status='approved';
+  IF v_delegate IS NULL THEN RAISE EXCEPTION 'المستفيد غير موجود أو غير معتمد أو غير مربوط بموزع'; END IF;
+  IF v_role='distributor' AND v_delegate IS DISTINCT FROM public.current_delegate_id() THEN RAISE EXCEPTION 'المستفيد غير مرتبط بالموزع الحالي'; END IF;
+  RETURN QUERY
+  SELECT p_beneficiary_id,d.id,d.full_name,c.id,c.name,cb.id,cb.name,cb.currency::text,
+         GREATEST(LEAST(cd.allocated_amount-cd.spent_amount-cd.returned_amount,COALESCE(bl.operational_balance,0)),0)::numeric,
+         cd.id
+  FROM public.campaign_distributors cd
+  JOIN public.delegates d ON d.id=cd.delegate_id AND d.is_active=true
+  JOIN public.campaigns c ON c.id=cd.campaign_id AND c.status='open' AND c.campaign_type IN ('cash','mixed')
+  JOIN public.cashboxes cb ON cb.id=cd.cashbox_id AND cb.is_active=true
+  LEFT JOIN public.campaign_balances bl ON bl.id=c.id
+  WHERE cd.delegate_id=v_delegate AND cd.status='active'
+    AND cd.allocated_amount-cd.spent_amount-cd.returned_amount>0 AND COALESCE(bl.operational_balance,0)>0
+  ORDER BY cd.assigned_at DESC LIMIT 1;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(text,numeric);
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(text,numeric,uuid);
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(uuid,numeric,uuid,uuid);
+CREATE FUNCTION public.quick_deliver_cash(p_beneficiary_id uuid,p_amount numeric,p_campaign_id uuid,p_cashbox_id uuid)
+RETURNS public.cash_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE ctx record; v_payment uuid; result public.cash_payments;
+BEGIN
+  IF p_amount IS NULL OR p_amount<=0 THEN RAISE EXCEPTION 'المبلغ يجب أن يكون أكبر من صفر'; END IF;
+  -- Serialise delivery for this beneficiary so two simultaneous requests
+  -- cannot both pass the duplicate-payment check.
+  PERFORM 1 FROM public.beneficiaries WHERE id=p_beneficiary_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستفيد غير موجود'; END IF;
+  SELECT * INTO ctx FROM public.get_quick_delivery_context(p_beneficiary_id);
+  IF NOT FOUND THEN RAISE EXCEPTION 'لا يوجد تخصيص صالح أو رصيد متاح لهذا المستفيد'; END IF;
+  IF ctx.campaign_id IS DISTINCT FROM p_campaign_id OR ctx.cashbox_id IS DISTINCT FROM p_cashbox_id THEN RAISE EXCEPTION 'تغيّر تخصيص المستفيد؛ أعد اختياره'; END IF;
+  IF p_amount>ctx.available_amount THEN RAISE EXCEPTION 'المبلغ يتجاوز المتاح. المتاح %',ctx.available_amount; END IF;
+  IF EXISTS(SELECT 1 FROM public.cash_payments WHERE beneficiary_id=p_beneficiary_id AND campaign_id=p_campaign_id AND status='posted') THEN RAISE EXCEPTION 'المستفيد استلم سابقاً من هذه الحملة'; END IF;
+  INSERT INTO public.cash_payments(payment_date,delegate_id,beneficiary_id,campaign_id,cashbox_id,amount,currency,delivery_method,receipt_status,actual_recipient,status,created_by,notes)
+  SELECT current_date,ctx.delegate_id,b.id,ctx.campaign_id,ctx.cashbox_id,p_amount,ctx.currency,'cash','received',b.full_name,'draft',auth.uid(),'تسليم سريع'
+  FROM public.beneficiaries b WHERE b.id=p_beneficiary_id RETURNING id INTO v_payment;
+  result:=public.post_cash_payment(v_payment);
+  INSERT INTO public.distribution_assignments(beneficiary_id,delegate_id,campaign_id,amount,delivery_status,delivered_at,payment_id)
+  VALUES(p_beneficiary_id,ctx.delegate_id,ctx.campaign_id,p_amount,'received',now(),v_payment);
+  RETURN result;
+END; $$;
+
+-- Basket payments automatically expand the basket into detail rows.
+DROP FUNCTION IF EXISTS public.post_in_kind_payment(uuid);
+CREATE FUNCTION public.post_in_kind_payment(p_id uuid)
+RETURNS public.in_kind_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE p public.in_kind_payments; det public.in_kind_payment_details; lot public.inventory_lots; v_available numeric(18,3); v_needed numeric(18,3); v_take numeric(18,3);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse','distributor']::public.app_role[]) THEN RAISE EXCEPTION 'غير مصرح بترحيل الصرف العيني'; END IF;
+  SELECT * INTO p FROM public.in_kind_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف العيني غير موجود'; END IF;
+  IF p.status='posted' THEN RETURN p; END IF;
+  IF p.status='cancelled' THEN RAISE EXCEPTION 'السند ملغي'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.beneficiaries b WHERE b.id=p.beneficiary_id AND b.status='approved') THEN RAISE EXCEPTION 'المستفيد غير معتمد'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.campaigns c WHERE c.id=p.campaign_id AND c.status='open' AND c.campaign_type IN ('in_kind','mixed')) THEN RAISE EXCEPTION 'الحملة غير مفتوحة أو لا تسمح بالصرف العيني'; END IF;
+  IF public.current_user_role()='distributor' THEN
+    IF p.delegate_id IS DISTINCT FROM public.current_delegate_id() THEN RAISE EXCEPTION 'السند غير مرتبط بالموزع الحالي'; END IF;
+  END IF;
+  IF EXISTS(SELECT 1 FROM public.in_kind_payments x WHERE x.id<>p.id AND x.beneficiary_id=p.beneficiary_id AND x.campaign_id=p.campaign_id AND x.status='posted' AND (p.basket_id IS NULL OR x.basket_id=p.basket_id)) AND NULLIF(trim(p.override_reason),'') IS NULL THEN RAISE EXCEPTION 'المستفيد استلم هذه المساعدة سابقاً'; END IF;
+  IF p.distribution_type='basket' AND p.basket_id IS NOT NULL AND NOT EXISTS(SELECT 1 FROM public.in_kind_payment_details WHERE payment_id=p.id) THEN
+    IF NOT EXISTS(SELECT 1 FROM public.baskets b WHERE b.id=p.basket_id AND b.campaign_id=p.campaign_id AND b.is_active=true) THEN RAISE EXCEPTION 'السلة غير نشطة أو لا تتبع الحملة'; END IF;
+    INSERT INTO public.in_kind_payment_details(payment_id,item_id,quantity)
+    SELECT p.id,bi.item_id,bi.quantity FROM public.basket_items bi WHERE bi.basket_id=p.basket_id;
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.in_kind_payment_details WHERE payment_id=p.id) THEN RAISE EXCEPTION 'السند لا يحتوي أصنافاً'; END IF;
+  FOR det IN SELECT * FROM public.in_kind_payment_details WHERE payment_id=p.id LOOP
+    SELECT COALESCE(SUM(quantity_available),0) INTO v_available FROM public.inventory_lots WHERE item_id=det.item_id AND campaign_id=p.campaign_id AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date);
+    IF v_available<det.quantity THEN RAISE EXCEPTION 'رصيد الحملة العيني غير كاف للصنف %. المتاح % والمطلوب %',det.item_id,v_available,det.quantity; END IF;
+    v_needed:=det.quantity;
+    FOR lot IN SELECT * FROM public.inventory_lots WHERE item_id=det.item_id AND campaign_id=p.campaign_id AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date) ORDER BY expiry_date NULLS LAST,created_at FOR UPDATE LOOP
+      EXIT WHEN v_needed<=0; v_take:=LEAST(v_needed,lot.quantity_available);
+      UPDATE public.inventory_lots SET quantity_available=quantity_available-v_take WHERE id=lot.id;
+      INSERT INTO public.inventory_movements(lot_id,item_id,movement_type,quantity,source_table,source_id,source_detail_id) VALUES(lot.id,det.item_id,'out',v_take,'in_kind_payments',p.id,det.id);
+      v_needed:=v_needed-v_take;
+    END LOOP;
+  END LOOP;
+  UPDATE public.in_kind_payments SET status='posted',posted_at=now() WHERE id=p_id RETURNING * INTO p;
+  RETURN p;
+END; $$;
+
+-- Cancelling a posted receipt creates a debit refund, restoring the cashbox balance.
+DROP FUNCTION IF EXISTS public.cancel_cash_receipt(uuid,text);
+CREATE FUNCTION public.cancel_cash_receipt(p_id uuid,p_reason text)
+RETURNS public.cash_receipts LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE r public.cash_receipts;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN RAISE EXCEPTION 'غير مصرح بإلغاء سند القبض'; END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO r FROM public.cash_receipts WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند القبض غير موجود'; END IF;
+  IF r.status='cancelled' THEN RETURN r; END IF;
+  IF EXISTS(SELECT 1 FROM public.cash_payments p WHERE p.cash_receipt_id=r.id AND p.status='posted') THEN RAISE EXCEPTION 'لا يمكن إلغاء سند قبض مرتبط بصرف مرحل'; END IF;
+  IF r.status='posted' THEN
+    INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+    VALUES(r.cashbox_id,'refund','cash_receipts',r.id,r.amount,0,r.currency,'عكس سند قبض - '||r.voucher_no,auth.uid()) ON CONFLICT DO NOTHING;
+  END IF;
+  UPDATE public.cash_receipts SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now() WHERE id=p_id RETURNING * INTO r;
+  RETURN r;
+END; $$;
+
+-- Views regenerated after schema expansion.
+DROP VIEW IF EXISTS public.v_delegates CASCADE;
+CREATE VIEW public.v_delegates WITH (security_invoker=true) AS
+SELECT d.*,COALESCE(cb.cash_balance,0) cash_balance,COALESCE((SELECT SUM(l.quantity_available) FROM public.inventory_lots l WHERE l.delegate_id=d.id),0) inventory_count,
+ lower(concat_ws(' ',d.full_name,d.phone,d.phone_secondary,d.national_id,d.address,d.delegate_type::text)) search_text
+FROM public.delegates d LEFT JOIN public.v_delegate_cash_balances cb ON cb.id=d.id;
+
+DROP VIEW IF EXISTS public.v_donors CASCADE;
+CREATE VIEW public.v_donors WITH (security_invoker=true) AS
+SELECT d.*,COALESCE((SELECT SUM(r.amount) FROM public.cash_receipts r WHERE r.donor_id=d.id AND r.status='posted'),0)::numeric(18,2) cash_total,
+ (SELECT COUNT(*) FROM public.in_kind_receipts ir WHERE ir.donor_id=d.id AND ir.status='posted') in_kind_total,
+ lower(concat_ws(' ',d.name,d.phone,d.phone_secondary,d.identity_no,d.email,d.address,d.representative_name,d.representative_phone,d.donor_type::text)) search_text
+FROM public.donors d;
+
+DROP VIEW IF EXISTS public.v_beneficiaries CASCADE;
+CREATE VIEW public.v_beneficiaries WITH (security_invoker=true) AS
+SELECT b.*,c.name category_name,h.name health_condition_name,d.full_name delegate_name,
+ lower(concat_ws(' ',b.file_no,b.full_name,b.national_id,b.phone,b.phone_secondary,b.governorate,b.district,b.village,b.address,b.guardian_name,c.name,h.name,d.full_name,b.status::text)) search_text
+FROM public.beneficiaries b JOIN public.beneficiary_categories c ON c.id=b.category_id LEFT JOIN public.health_conditions h ON h.id=b.health_condition_id LEFT JOIN public.delegates d ON d.id=b.delegate_id;
+
+DROP VIEW IF EXISTS public.v_campaign_in_kind_funding CASCADE;
+CREATE VIEW public.v_campaign_in_kind_funding WITH (security_invoker=true) AS
+SELECT f.*,c.name campaign_name,w.name warehouse_name,COUNT(fd.id) items_count,COALESCE(SUM(fd.quantity),0) total_quantity,
+ COALESCE(string_agg(i.name||' × '||trim(to_char(fd.quantity,'FM999999990.###')),'، ' ORDER BY i.name),'') items_summary,
+ lower(concat_ws(' ',f.funding_no,c.name,w.name,f.status::text,f.notes,string_agg(i.name,' '))) search_text
+FROM public.campaign_in_kind_funding f JOIN public.campaigns c ON c.id=f.campaign_id JOIN public.warehouses w ON w.id=f.warehouse_id
+LEFT JOIN public.campaign_in_kind_funding_details fd ON fd.funding_id=f.id LEFT JOIN public.items i ON i.id=fd.item_id
+GROUP BY f.id,c.name,w.name;
+
+DROP VIEW IF EXISTS public.v_stock_balances CASCADE;
+CREATE VIEW public.v_stock_balances WITH (security_invoker=true) AS
+SELECT min(l.id::text)::uuid id,l.warehouse_id,l.item_id,w.name warehouse_name,i.name item_name,i.code item_code,i.unit unit_name,
+ COALESCE(SUM(l.quantity_available),0)::numeric(18,3) available_qty,0::numeric(18,3) reserved_qty,COALESCE(SUM(l.quantity_damaged),0)::numeric(18,3) damaged_qty,
+ COALESCE(i.min_stock,0)::numeric min_stock,CASE WHEN COALESCE(SUM(l.quantity_available),0)<=COALESCE(i.min_stock,0) THEN 'review' ELSE 'active' END status,
+ max(l.updated_at) updated_at,lower(concat_ws(' ',w.name,i.name,i.code,i.unit)) search_text
+FROM public.inventory_lots l JOIN public.warehouses w ON w.id=l.warehouse_id JOIN public.items i ON i.id=l.item_id
+WHERE l.warehouse_id IS NOT NULL AND l.campaign_id IS NULL GROUP BY l.warehouse_id,l.item_id,w.name,i.name,i.code,i.unit,i.min_stock;
+
+DROP VIEW IF EXISTS public.v_user_archives CASCADE;
+CREATE VIEW public.v_user_archives WITH (security_invoker=true) AS
+SELECT a.id,a.user_id,a.archive_type,a.title,a.description,a.reference_no,a.payload,a.created_at,p.full_name user_name,
+ lower(concat_ws(' ',p.full_name,a.archive_type,a.title,a.description,a.reference_no)) search_text
+FROM public.user_archives a LEFT JOIN public.profiles p ON p.id=a.user_id
+UNION ALL
+SELECT l.id,l.user_id,l.action,l.action||' — '||l.table_name,l.table_name,l.record_id::text,jsonb_build_object('old',l.old_data,'new',l.new_data),l.created_at,p.full_name,
+ lower(concat_ws(' ',p.full_name,l.action,l.table_name,l.record_id::text))
+FROM public.audit_logs l LEFT JOIN public.profiles p ON p.id=l.user_id;
+
+DROP VIEW IF EXISTS public.v_import_jobs CASCADE;
+CREATE VIEW public.v_import_jobs WITH (security_invoker=true) AS
+SELECT j.*,p.full_name created_by_name,
+ CASE j.target_table
+   WHEN 'beneficiaries' THEN 'المستفيدون' WHEN 'delegates' THEN 'الموزعون' WHEN 'donors' THEN 'المتبرعون'
+   WHEN 'beneficiary_categories' THEN 'فئات المستفيدين' WHEN 'health_conditions' THEN 'الحالات الصحية'
+   WHEN 'items' THEN 'الأصناف' WHEN 'units' THEN 'الوحدات' WHEN 'branches' THEN 'الفروع'
+   WHEN 'cashboxes' THEN 'الصناديق' WHEN 'warehouses' THEN 'المخازن' ELSE j.target_table
+ END target_name,
+ lower(concat_ws(' ',j.target_table,j.file_name,j.status,p.full_name)) search_text
+FROM public.import_jobs j LEFT JOIN public.profiles p ON p.id=j.created_by;
+
+-- Expand automatic auditing to all manager-facing operational directories.
+DO $$ DECLARE t text;
+BEGIN
+  FOREACH t IN ARRAY ARRAY['branches','cashboxes','cash_transfers','authorized_devices','user_sessions','beneficiary_categories','health_conditions','warehouses','units','campaign_funding','campaign_distributors','campaign_in_kind_funding','inventory_lots','import_jobs']
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS audit_%I ON public.%I',t,t);
+    EXECUTE format('CREATE TRIGGER audit_%I AFTER INSERT OR UPDATE OR DELETE ON public.%I FOR EACH ROW EXECUTE FUNCTION public.audit_row_change()',t,t);
+  END LOOP;
+END $$;
+
+-- Tighten policies that were previously unrestricted.
+DO $$ DECLARE p record;
+BEGIN
+  FOR p IN SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename='authorized_devices'
+  LOOP EXECUTE format('DROP POLICY IF EXISTS %I ON public.authorized_devices',p.policyname); END LOOP;
+END $$;
+CREATE POLICY authorized_devices_read_own_or_admin ON public.authorized_devices FOR SELECT TO authenticated
+USING(user_id=auth.uid() OR public.is_active_admin());
+CREATE POLICY authorized_devices_admin_manage ON public.authorized_devices FOR ALL TO authenticated
+USING(public.is_active_admin()) WITH CHECK(public.is_active_admin());
+
+DROP POLICY IF EXISTS authenticated_manage_campaign_funding ON public.campaign_funding;
+CREATE POLICY authenticated_manage_campaign_funding ON public.campaign_funding FOR ALL TO authenticated
+USING(public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[])) WITH CHECK(public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]));
+DROP POLICY IF EXISTS authenticated_manage_campaign_distributors ON public.campaign_distributors;
+CREATE POLICY authenticated_manage_campaign_distributors ON public.campaign_distributors FOR ALL TO authenticated
+USING(public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[])) WITH CHECK(public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]));
+
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.resolve_username(text) TO anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.enforce_approved_device() TO anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.current_user_role(),public.has_role(public.app_role[]),public.current_delegate_id(),public.is_active_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.request_device_authorization(text,text,text),public.open_user_session(text,text),public.close_user_session(uuid),public.touch_user_session(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.post_cash_transfer(uuid),public.cancel_campaign_funding(uuid,text),public.quick_deliver_cash(uuid,numeric,uuid,uuid),public.get_quick_delivery_context(uuid),public.post_in_kind_payment(uuid),public.cancel_cash_receipt(uuid,text) TO authenticated;
+GRANT SELECT ON public.v_delegates,public.v_donors,public.v_beneficiaries,public.v_campaign_in_kind_funding,public.v_stock_balances,public.v_user_archives,public.v_import_jobs TO authenticated;
+
+UPDATE public.system_installation SET version='11.1.0',installed_at=now() WHERE id=1;
+NOTIFY pgrst,'reload schema';
+ALTER ROLE authenticator SET pgrst.db_pre_request='public.enforce_approved_device';
+NOTIFY pgrst,'reload config';
+
+COMMIT;
+
+-- =============================================================
+-- القسم 3: القواعد المالية والصلاحيات النهائية V11.2
+-- =============================================================
+-- =============================================================
+-- Zakat Management System V11.2.0 — final verified rules
+-- This patch is merged into database_complete.sql for delivery.
+-- =============================================================
+
+BEGIN;
+
+-- The former distributor-advance module is intentionally removed. Campaign
+-- distributor allocations are the single source of distributor cash limits.
+DROP VIEW IF EXISTS public.v_delegate_advances CASCADE;
+DROP FUNCTION IF EXISTS public.post_delegate_advance(uuid);
+DROP TABLE IF EXISTS public.delegate_advances CASCADE;
+
+-- Complete document lifecycle fields.
+ALTER TABLE public.cash_transfers ADD COLUMN IF NOT EXISTS posted_at timestamptz;
+ALTER TABLE public.cash_transfers ADD COLUMN IF NOT EXISTS cancelled_at timestamptz;
+ALTER TABLE public.cash_transfers ADD COLUMN IF NOT EXISTS cancellation_reason text;
+ALTER TABLE public.cash_transfers ADD COLUMN IF NOT EXISTS idempotency_key uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE public.campaign_funding ADD COLUMN IF NOT EXISTS idempotency_key uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE public.campaign_in_kind_funding ADD COLUMN IF NOT EXISTS idempotency_key uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE public.baskets ADD COLUMN IF NOT EXISTS idempotency_key uuid NOT NULL DEFAULT gen_random_uuid();
+ALTER TABLE public.campaign_distributors ALTER COLUMN cashbox_id SET NOT NULL;
+ALTER TABLE public.campaign_distributors DROP CONSTRAINT IF EXISTS campaign_distributors_amounts_check;
+ALTER TABLE public.campaign_distributors
+  ADD CONSTRAINT campaign_distributors_amounts_check
+  CHECK (spent_amount + returned_amount <= allocated_amount);
+
+CREATE INDEX IF NOT EXISTS campaign_distributors_context_idx
+  ON public.campaign_distributors(campaign_id,delegate_id,status,assigned_at DESC);
+CREATE INDEX IF NOT EXISTS campaign_funding_posted_idx
+  ON public.campaign_funding(campaign_id,status) INCLUDE(amount,cashbox_id);
+CREATE INDEX IF NOT EXISTS cash_payments_duplicate_idx
+  ON public.cash_payments(beneficiary_id,campaign_id)
+  WHERE status='posted';
+CREATE INDEX IF NOT EXISTS inventory_lots_campaign_item_fefo_idx
+  ON public.inventory_lots(campaign_id,item_id,expiry_date,created_at)
+  WHERE quantity_available>0;
+CREATE INDEX IF NOT EXISTS inventory_lots_warehouse_item_fefo_idx
+  ON public.inventory_lots(warehouse_id,item_id,expiry_date,created_at)
+  WHERE campaign_id IS NULL AND quantity_available>0;
+CREATE UNIQUE INDEX IF NOT EXISTS cash_transfers_idempotency_uq ON public.cash_transfers(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_funding_idempotency_uq ON public.campaign_funding(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS campaign_in_kind_funding_idempotency_uq ON public.campaign_in_kind_funding(idempotency_key);
+CREATE UNIQUE INDEX IF NOT EXISTS baskets_idempotency_uq ON public.baskets(idempotency_key);
+
+-- Stable automatic codes for setup directories. A user may still enter a
+-- unique code; leaving it blank generates one safely under concurrency.
+CREATE SEQUENCE IF NOT EXISTS public.branch_code_seq;
+CREATE SEQUENCE IF NOT EXISTS public.cashbox_code_seq;
+CREATE SEQUENCE IF NOT EXISTS public.warehouse_code_seq;
+CREATE OR REPLACE FUNCTION public.assign_reference_code()
+RETURNS trigger LANGUAGE plpgsql SET search_path=public AS $$
+DECLARE v_candidate text; v_exists boolean;
+BEGIN
+  IF NULLIF(trim(NEW.code),'') IS NOT NULL THEN
+    NEW.code:=upper(trim(NEW.code));
+    RETURN NEW;
+  END IF;
+  LOOP
+    v_candidate:=TG_ARGV[0]||lpad(nextval(TG_ARGV[1]::regclass)::text,6,'0');
+    EXECUTE format('SELECT EXISTS(SELECT 1 FROM %I.%I WHERE code=$1)',TG_TABLE_SCHEMA,TG_TABLE_NAME)
+      INTO v_exists USING v_candidate;
+    EXIT WHEN NOT v_exists;
+  END LOOP;
+  NEW.code:=v_candidate;
+  RETURN NEW;
+END; $$;
+DROP TRIGGER IF EXISTS assign_branch_code ON public.branches;
+CREATE TRIGGER assign_branch_code BEFORE INSERT OR UPDATE OF code ON public.branches
+FOR EACH ROW EXECUTE FUNCTION public.assign_reference_code('BR','public.branch_code_seq');
+DROP TRIGGER IF EXISTS assign_cashbox_code ON public.cashboxes;
+CREATE TRIGGER assign_cashbox_code BEFORE INSERT OR UPDATE OF code ON public.cashboxes
+FOR EACH ROW EXECUTE FUNCTION public.assign_reference_code('BOX','public.cashbox_code_seq');
+DROP TRIGGER IF EXISTS assign_warehouse_code ON public.warehouses;
+CREATE TRIGGER assign_warehouse_code BEFORE INSERT OR UPDATE OF code ON public.warehouses
+FOR EACH ROW EXECUTE FUNCTION public.assign_reference_code('WH','public.warehouse_code_seq');
+
+-- Campaign balances are based only on posted funding and posted payments.
+DROP VIEW IF EXISTS public.campaign_balances CASCADE;
+CREATE VIEW public.campaign_balances WITH (security_invoker=true) AS
+SELECT
+  c.id,c.name,c.currency,c.status,c.created_at,
+  COALESCE(f.funded_total,0)::numeric(18,2) funded_total,
+  COALESCE(a.allocated_total,0)::numeric(18,2) allocated_total,
+  COALESCE(p.spent_total,0)::numeric(18,2) spent_total,
+  COALESCE(a.returned_total,0)::numeric(18,2) returned_total,
+  (COALESCE(f.funded_total,0)-COALESCE(a.allocated_total,0)+COALESCE(a.returned_total,0))::numeric(18,2) unallocated_balance,
+  (COALESCE(f.funded_total,0)-COALESCE(p.spent_total,0))::numeric(18,2) operational_balance
+FROM public.campaigns c
+LEFT JOIN (
+  SELECT campaign_id,SUM(amount) funded_total
+  FROM public.campaign_funding WHERE status='posted' GROUP BY campaign_id
+) f ON f.campaign_id=c.id
+LEFT JOIN (
+  SELECT campaign_id,SUM(allocated_amount) allocated_total,SUM(returned_amount) returned_total
+  FROM public.campaign_distributors GROUP BY campaign_id
+) a ON a.campaign_id=c.id
+LEFT JOIN (
+  SELECT campaign_id,SUM(amount) spent_total
+  FROM public.cash_payments WHERE status='posted' GROUP BY campaign_id
+) p ON p.campaign_id=c.id;
+
+DROP VIEW IF EXISTS public.v_campaign_cash_balances CASCADE;
+CREATE VIEW public.v_campaign_cash_balances WITH (security_invoker=true) AS
+SELECT c.id,
+  COALESCE(b.funded_total,0)::numeric(18,2) received_total,
+  COALESCE(b.spent_total,0)::numeric(18,2) spent_total,
+  COALESCE(b.operational_balance,0)::numeric(18,2) balance
+FROM public.campaigns c LEFT JOIN public.campaign_balances b ON b.id=c.id;
+
+DROP VIEW IF EXISTS public.v_campaigns CASCADE;
+CREATE VIEW public.v_campaigns WITH (security_invoker=true) AS
+SELECT c.*,p.full_name responsible_name,b.received_total,b.spent_total,b.balance,
+  lower(concat_ws(' ',c.name,c.description,c.campaign_type::text,c.status::text,p.full_name)) search_text
+FROM public.campaigns c
+LEFT JOIN public.profiles p ON p.id=c.responsible_id
+LEFT JOIN public.v_campaign_cash_balances b ON b.id=c.id;
+
+DROP VIEW IF EXISTS public.v_delegate_cash_balances CASCADE;
+CREATE VIEW public.v_delegate_cash_balances WITH (security_invoker=true) AS
+SELECT d.id,
+  COALESCE(SUM(cd.allocated_amount-cd.spent_amount-cd.returned_amount),0)::numeric(18,2) cash_balance
+FROM public.delegates d
+LEFT JOIN public.campaign_distributors cd ON cd.delegate_id=d.id
+GROUP BY d.id;
+
+DROP VIEW IF EXISTS public.v_delegates CASCADE;
+CREATE VIEW public.v_delegates WITH (security_invoker=true) AS
+SELECT d.*,COALESCE(cb.cash_balance,0) cash_balance,
+  COALESCE((SELECT SUM(l.quantity_available) FROM public.inventory_lots l WHERE l.delegate_id=d.id),0) inventory_count,
+  lower(concat_ws(' ',d.full_name,d.phone,d.phone_secondary,d.national_id,d.address,d.delegate_type::text)) search_text
+FROM public.delegates d LEFT JOIN public.v_delegate_cash_balances cb ON cb.id=d.id;
+
+DROP VIEW IF EXISTS public.v_campaign_distributors CASCADE;
+CREATE VIEW public.v_campaign_distributors WITH (security_invoker=true) AS
+SELECT cd.*,c.name campaign_name,d.full_name delegate_name,b.name cashbox_name,b.currency,
+  lower(concat_ws(' ',c.name,d.full_name,b.name,cd.area_name,cd.status,cd.notes)) search_text
+FROM public.campaign_distributors cd
+JOIN public.campaigns c ON c.id=cd.campaign_id
+JOIN public.delegates d ON d.id=cd.delegate_id
+JOIN public.cashboxes b ON b.id=cd.cashbox_id;
+
+-- Direct API writes cannot forge spent/returned totals. Allocation creation and
+-- edits lock the campaign row so two simultaneous requests cannot over-allocate.
+CREATE OR REPLACE FUNCTION public.guard_campaign_distributor()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_funded numeric(18,2);
+  v_committed numeric(18,2);
+  v_campaign public.campaigns%ROWTYPE;
+  v_box public.cashboxes%ROWTYPE;
+  v_internal boolean:=COALESCE(current_setting('zakat.internal_financial_update',true),'')='on';
+BEGIN
+  IF v_internal THEN RETURN NEW; END IF;
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بتعديل تخصيصات الموزعين';
+  END IF;
+  IF TG_OP='INSERT' AND (NEW.spent_amount<>0 OR NEW.returned_amount<>0) THEN
+    RAISE EXCEPTION 'يبدأ التخصيص دون مصروف أو مرتجع';
+  END IF;
+  IF TG_OP='UPDATE' AND (NEW.spent_amount IS DISTINCT FROM OLD.spent_amount OR NEW.returned_amount IS DISTINCT FROM OLD.returned_amount) THEN
+    RAISE EXCEPTION 'المصروف والمرتجع يعدلان من عمليات الترحيل والتسوية فقط';
+  END IF;
+  IF TG_OP='UPDATE' AND OLD.spent_amount>0
+     AND (NEW.campaign_id IS DISTINCT FROM OLD.campaign_id OR NEW.delegate_id IS DISTINCT FROM OLD.delegate_id) THEN
+    RAISE EXCEPTION 'لا يمكن تغيير الحملة أو الموزع بعد وجود صرف مرحل';
+  END IF;
+  SELECT * INTO v_campaign FROM public.campaigns WHERE id=NEW.campaign_id FOR UPDATE;
+  IF NOT FOUND OR v_campaign.status<>'open' OR v_campaign.campaign_type NOT IN ('cash','mixed') THEN
+    RAISE EXCEPTION 'الحملة غير مفتوحة أو لا تقبل الصرف النقدي';
+  END IF;
+  SELECT * INTO v_box FROM public.cashboxes WHERE id=NEW.cashbox_id;
+  IF NOT FOUND OR NOT v_box.is_active THEN RAISE EXCEPTION 'الصندوق غير موجود أو موقوف'; END IF;
+  IF v_box.currency<>v_campaign.currency THEN RAISE EXCEPTION 'عملة الصندوق لا تطابق عملة الحملة'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.delegates d WHERE d.id=NEW.delegate_id AND d.is_active=true) THEN
+    RAISE EXCEPTION 'الموزع غير موجود أو موقوف';
+  END IF;
+  IF NEW.allocated_amount<NEW.spent_amount+NEW.returned_amount THEN
+    RAISE EXCEPTION 'المبلغ المخصص أقل من المصروف والمرتجع';
+  END IF;
+  SELECT COALESCE(SUM(amount),0) INTO v_funded
+  FROM public.campaign_funding WHERE campaign_id=NEW.campaign_id AND status='posted';
+  SELECT COALESCE(SUM(allocated_amount-returned_amount),0) INTO v_committed
+  FROM public.campaign_distributors
+  WHERE campaign_id=NEW.campaign_id AND (TG_OP='INSERT' OR id<>NEW.id);
+  IF v_committed+NEW.allocated_amount-NEW.returned_amount>v_funded THEN
+    RAISE EXCEPTION 'المبلغ المخصص يتجاوز رصيد الحملة غير الموزع. التمويل المرحل % والملتزم %',v_funded,v_committed;
+  END IF;
+  IF NEW.status='settled' AND NEW.allocated_amount-NEW.spent_amount-NEW.returned_amount>0 THEN
+    RAISE EXCEPTION 'لا يمكن إقفال التخصيص قبل صرف أو إرجاع كامل المتبقي';
+  END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS guard_campaign_distributor_trigger ON public.campaign_distributors;
+CREATE TRIGGER guard_campaign_distributor_trigger
+BEFORE INSERT OR UPDATE ON public.campaign_distributors
+FOR EACH ROW EXECUTE FUNCTION public.guard_campaign_distributor();
+
+-- One context function is shared by the ordinary payment voucher and quick
+-- delivery. Only the administrator may override the beneficiary distributor.
+DROP FUNCTION IF EXISTS public.get_quick_delivery_context(uuid);
+DROP FUNCTION IF EXISTS public.get_cash_payment_context(uuid,uuid,uuid);
+CREATE FUNCTION public.get_cash_payment_context(
+  p_beneficiary_id uuid,
+  p_campaign_id uuid DEFAULT NULL,
+  p_delegate_id uuid DEFAULT NULL
+)
+RETURNS TABLE(
+  beneficiary_id uuid,delegate_id uuid,delegate_name text,
+  campaign_id uuid,campaign_name text,cashbox_id uuid,cashbox_name text,
+  currency text,available_amount numeric,assignment_id uuid
+)
+LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_role public.app_role;
+  v_beneficiary_delegate uuid;
+  v_delegate uuid;
+BEGIN
+  v_role:=public.current_user_role();
+  IF v_role NOT IN ('admin','supervisor','accountant','distributor') THEN
+    RAISE EXCEPTION 'غير مصرح بالصرف النقدي';
+  END IF;
+  SELECT b.delegate_id INTO v_beneficiary_delegate
+  FROM public.beneficiaries b
+  WHERE b.id=p_beneficiary_id AND b.status='approved';
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستفيد غير موجود أو غير معتمد'; END IF;
+  IF v_role='admin' THEN
+    v_delegate:=COALESCE(p_delegate_id,v_beneficiary_delegate);
+  ELSE
+    IF p_delegate_id IS NOT NULL AND p_delegate_id IS DISTINCT FROM v_beneficiary_delegate THEN
+      RAISE EXCEPTION 'لا يستطيع تغيير موزع المستفيد إلا مدير النظام';
+    END IF;
+    v_delegate:=v_beneficiary_delegate;
+  END IF;
+  IF v_delegate IS NULL THEN RAISE EXCEPTION 'المستفيد غير مربوط بموزع نشط'; END IF;
+  IF v_role='distributor' AND v_delegate IS DISTINCT FROM public.current_delegate_id() THEN
+    RAISE EXCEPTION 'المستفيد غير مرتبط بحساب الموزع الحالي';
+  END IF;
+
+  RETURN QUERY
+  SELECT p_beneficiary_id,d.id,d.full_name,c.id,c.name,box.id,box.name,box.currency::text,
+    GREATEST(LEAST(
+      cd.allocated_amount-cd.spent_amount-cd.returned_amount,
+      COALESCE(balance.operational_balance,0)
+    ),0)::numeric,
+    cd.id
+  FROM public.campaign_distributors cd
+  JOIN public.delegates d ON d.id=cd.delegate_id AND d.is_active=true
+  JOIN public.campaigns c ON c.id=cd.campaign_id
+    AND c.status='open' AND c.campaign_type IN ('cash','mixed')
+  JOIN public.cashboxes box ON box.id=cd.cashbox_id AND box.is_active=true
+    AND box.currency=c.currency
+  LEFT JOIN public.campaign_balances balance ON balance.id=c.id
+  WHERE cd.delegate_id=v_delegate AND cd.status='active'
+    AND (p_campaign_id IS NULL OR cd.campaign_id=p_campaign_id)
+    AND cd.allocated_amount-cd.spent_amount-cd.returned_amount>0
+    AND COALESCE(balance.operational_balance,0)>0
+  ORDER BY cd.assigned_at DESC,cd.id
+  LIMIT 1;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.enforce_cash_payment_context()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  ctx record;
+  v_internal boolean:=COALESCE(current_setting('zakat.internal_financial_update',true),'')='on';
+BEGIN
+  IF v_internal THEN RETURN NEW; END IF;
+  IF TG_OP='UPDATE' AND OLD.status IN ('posted','cancelled') THEN
+    RAISE EXCEPTION 'لا يمكن تعديل سند صرف مرحل أو ملغي';
+  END IF;
+  IF NULLIF(trim(NEW.override_reason),'') IS NOT NULL AND public.current_user_role()<>'admin' THEN
+    RAISE EXCEPTION 'الاستثناء من منع التكرار متاح لمدير النظام فقط';
+  END IF;
+  SELECT * INTO ctx
+  FROM public.get_cash_payment_context(NEW.beneficiary_id,NEW.campaign_id,NEW.delegate_id);
+  IF NOT FOUND THEN RAISE EXCEPTION 'لا يوجد تخصيص نشط ورصيد صالح لهذا الصرف'; END IF;
+  NEW.delegate_id:=ctx.delegate_id;
+  NEW.cashbox_id:=ctx.cashbox_id;
+  NEW.currency:=ctx.currency;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS enforce_cash_payment_context_trigger ON public.cash_payments;
+CREATE TRIGGER enforce_cash_payment_context_trigger
+BEFORE INSERT OR UPDATE ON public.cash_payments
+FOR EACH ROW EXECUTE FUNCTION public.enforce_cash_payment_context();
+
+-- Cash receipt posting and reversal lock the cashbox before reading its balance.
+DROP FUNCTION IF EXISTS public.post_cash_receipt(uuid);
+CREATE FUNCTION public.post_cash_receipt(p_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE r public.cash_receipts%ROWTYPE; box public.cashboxes%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل سند القبض';
+  END IF;
+  SELECT * INTO r FROM public.cash_receipts WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند القبض غير موجود'; END IF;
+  IF r.status='posted' THEN RETURN; END IF;
+  IF r.status='cancelled' THEN RAISE EXCEPTION 'سند القبض ملغي'; END IF;
+  IF r.amount<=0 OR r.cashbox_id IS NULL THEN RAISE EXCEPTION 'الصندوق والمبلغ الصحيح مطلوبان'; END IF;
+  SELECT * INTO box FROM public.cashboxes WHERE id=r.cashbox_id FOR UPDATE;
+  IF NOT FOUND OR NOT box.is_active THEN RAISE EXCEPTION 'الصندوق غير موجود أو موقوف'; END IF;
+  IF box.currency<>r.currency THEN RAISE EXCEPTION 'عملة السند لا تطابق عملة الصندوق'; END IF;
+  INSERT INTO public.cashbox_ledger(
+    cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by
+  ) VALUES(
+    r.cashbox_id,'donation','cash_receipts',r.id,0,r.amount,r.currency,'سند قبض - '||r.voucher_no,auth.uid()
+  ) ON CONFLICT DO NOTHING;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.cash_receipts SET status='posted',posted_at=COALESCE(posted_at,now()),updated_at=now() WHERE id=r.id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_cash_receipt(uuid,text);
+CREATE FUNCTION public.cancel_cash_receipt(p_id uuid,p_reason text)
+RETURNS public.cash_receipts LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE r public.cash_receipts%ROWTYPE; v_balance numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء سند القبض';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO r FROM public.cash_receipts WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند القبض غير موجود'; END IF;
+  IF r.status='cancelled' THEN RETURN r; END IF;
+  IF r.status='posted' THEN
+    PERFORM 1 FROM public.cashboxes WHERE id=r.cashbox_id FOR UPDATE;
+    SELECT current_balance INTO v_balance FROM public.cashbox_balances WHERE id=r.cashbox_id;
+    IF COALESCE(v_balance,0)<r.amount THEN
+      RAISE EXCEPTION 'لا يمكن عكس سند القبض لأن الرصيد الحالي أقل من قيمته. المتاح % والمطلوب %',COALESCE(v_balance,0),r.amount;
+    END IF;
+    INSERT INTO public.cashbox_ledger(
+      cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by
+    ) VALUES(
+      r.cashbox_id,'refund','cash_receipts',r.id,r.amount,0,r.currency,'عكس سند قبض - '||r.voucher_no,auth.uid()
+    ) ON CONFLICT DO NOTHING;
+  END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.cash_receipts
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+  WHERE id=r.id RETURNING * INTO r;
+  RETURN r;
+END; $$;
+
+-- Campaign funding moves cash out of the cashbox exactly once. Campaign and
+-- cashbox locks make simultaneous funding/transfer attempts deterministic.
+DROP FUNCTION IF EXISTS public.post_campaign_funding(uuid);
+CREATE FUNCTION public.post_campaign_funding(p_funding_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  f public.campaign_funding%ROWTYPE;
+  campaign public.campaigns%ROWTYPE;
+  box public.cashboxes%ROWTYPE;
+  v_balance numeric(18,2);
+  v_funded numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل تمويل الحملة';
+  END IF;
+  SELECT * INTO f FROM public.campaign_funding WHERE id=p_funding_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'تمويل الحملة غير موجود'; END IF;
+  IF f.status='posted' THEN RETURN; END IF;
+  IF f.status='cancelled' THEN RAISE EXCEPTION 'تمويل الحملة ملغي'; END IF;
+  IF f.amount<=0 THEN RAISE EXCEPTION 'مبلغ التمويل يجب أن يكون أكبر من صفر'; END IF;
+  SELECT * INTO campaign FROM public.campaigns WHERE id=f.campaign_id FOR UPDATE;
+  IF NOT FOUND OR campaign.status<>'open' OR campaign.campaign_type NOT IN ('cash','mixed') THEN
+    RAISE EXCEPTION 'الحملة غير مفتوحة أو لا تقبل تمويلاً نقدياً';
+  END IF;
+  SELECT * INTO box FROM public.cashboxes WHERE id=f.cashbox_id FOR UPDATE;
+  IF NOT FOUND OR NOT box.is_active THEN RAISE EXCEPTION 'الصندوق غير موجود أو موقوف'; END IF;
+  IF box.currency<>campaign.currency OR f.currency<>campaign.currency THEN
+    RAISE EXCEPTION 'عملة التمويل والصندوق يجب أن تطابق عملة الحملة';
+  END IF;
+  SELECT current_balance INTO v_balance FROM public.cashbox_balances WHERE id=box.id;
+  IF COALESCE(v_balance,0)<f.amount THEN
+    RAISE EXCEPTION 'رصيد الصندوق غير كافٍ. المتاح % والمطلوب %',COALESCE(v_balance,0),f.amount;
+  END IF;
+  SELECT COALESCE(SUM(amount),0) INTO v_funded
+  FROM public.campaign_funding WHERE campaign_id=f.campaign_id AND status='posted';
+  IF campaign.ceiling>0 AND v_funded+f.amount>campaign.ceiling THEN
+    RAISE EXCEPTION 'التمويل يتجاوز سقف الحملة. السقف % والممول بعد العملية %',campaign.ceiling,v_funded+f.amount;
+  END IF;
+  INSERT INTO public.cashbox_ledger(
+    cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by
+  ) VALUES(
+    f.cashbox_id,'campaign_funding','campaign_funding',f.id,f.amount,0,f.currency,
+    'تمويل حملة - '||f.funding_no,auth.uid()
+  ) ON CONFLICT DO NOTHING;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_funding
+  SET status='posted',posted_at=COALESCE(posted_at,now()),posted_by=auth.uid(),updated_at=now()
+  WHERE id=f.id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_campaign_funding(uuid,text);
+CREATE FUNCTION public.cancel_campaign_funding(p_id uuid,p_reason text)
+RETURNS public.campaign_funding LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  f public.campaign_funding%ROWTYPE;
+  v_operational numeric(18,2);
+  v_other_funding numeric(18,2);
+  v_committed numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء تمويل الحملة';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO f FROM public.campaign_funding WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'تمويل الحملة غير موجود'; END IF;
+  IF f.status='cancelled' THEN RETURN f; END IF;
+  IF f.status='posted' THEN
+    PERFORM 1 FROM public.campaigns WHERE id=f.campaign_id FOR UPDATE;
+    SELECT COALESCE(operational_balance,0) INTO v_operational
+    FROM public.campaign_balances WHERE id=f.campaign_id;
+    IF v_operational<f.amount THEN
+      RAISE EXCEPTION 'لا يمكن الإلغاء لأن جزءاً من هذا التمويل صُرف بالفعل';
+    END IF;
+    SELECT COALESCE(SUM(amount),0) INTO v_other_funding
+    FROM public.campaign_funding
+    WHERE campaign_id=f.campaign_id AND status='posted' AND id<>f.id;
+    SELECT COALESCE(SUM(allocated_amount-returned_amount),0) INTO v_committed
+    FROM public.campaign_distributors WHERE campaign_id=f.campaign_id;
+    IF v_other_funding<v_committed THEN
+      RAISE EXCEPTION 'لا يمكن الإلغاء قبل تخفيض أو تسوية تخصيصات الموزعين';
+    END IF;
+    PERFORM 1 FROM public.cashboxes WHERE id=f.cashbox_id FOR UPDATE;
+    INSERT INTO public.cashbox_ledger(
+      cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by
+    ) VALUES(
+      f.cashbox_id,'refund','campaign_funding',f.id,0,f.amount,f.currency,
+      'عكس تمويل حملة - '||f.funding_no,auth.uid()
+    ) ON CONFLICT DO NOTHING;
+  END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_funding
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+  WHERE id=f.id RETURNING * INTO f;
+  RETURN f;
+END; $$;
+
+-- Transfers lock both boxes in UUID order to avoid deadlocks.
+DROP FUNCTION IF EXISTS public.post_cash_transfer(uuid);
+CREATE FUNCTION public.post_cash_transfer(p_transfer_id uuid)
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  t public.cash_transfers%ROWTYPE;
+  from_box public.cashboxes%ROWTYPE;
+  to_box public.cashboxes%ROWTYPE;
+  v_balance numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل التحويل';
+  END IF;
+  SELECT * INTO t FROM public.cash_transfers WHERE id=p_transfer_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'التحويل غير موجود'; END IF;
+  IF t.status='posted' THEN RETURN; END IF;
+  IF t.status='cancelled' THEN RAISE EXCEPTION 'التحويل ملغي'; END IF;
+  IF t.amount<=0 THEN RAISE EXCEPTION 'مبلغ التحويل يجب أن يكون أكبر من صفر'; END IF;
+  IF t.from_cashbox_id=t.to_cashbox_id THEN RAISE EXCEPTION 'لا يمكن التحويل إلى نفس الصندوق'; END IF;
+  PERFORM id FROM public.cashboxes
+  WHERE id IN(t.from_cashbox_id,t.to_cashbox_id) ORDER BY id FOR UPDATE;
+  SELECT * INTO from_box FROM public.cashboxes WHERE id=t.from_cashbox_id;
+  SELECT * INTO to_box FROM public.cashboxes WHERE id=t.to_cashbox_id;
+  IF from_box.id IS NULL OR to_box.id IS NULL THEN RAISE EXCEPTION 'أحد الصندوقين غير موجود'; END IF;
+  IF NOT from_box.is_active OR NOT to_box.is_active THEN RAISE EXCEPTION 'لا يمكن التحويل من أو إلى صندوق موقوف'; END IF;
+  IF from_box.currency<>to_box.currency THEN
+    RAISE EXCEPTION 'لا يمكن التحويل بين عملتين مختلفتين (% و%)',from_box.currency,to_box.currency;
+  END IF;
+  SELECT current_balance INTO v_balance FROM public.cashbox_balances WHERE id=from_box.id;
+  IF COALESCE(v_balance,0)<t.amount THEN
+    RAISE EXCEPTION 'رصيد الصندوق المصدر غير كافٍ. المتاح % والمطلوب %',COALESCE(v_balance,0),t.amount;
+  END IF;
+  INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+  VALUES(t.from_cashbox_id,'transfer_out','cash_transfers',t.id,t.amount,0,from_box.currency,'تحويل صادر - '||t.transfer_no,auth.uid())
+  ON CONFLICT DO NOTHING;
+  INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+  VALUES(t.to_cashbox_id,'transfer_in','cash_transfers',t.id,0,t.amount,to_box.currency,'تحويل وارد - '||t.transfer_no,auth.uid())
+  ON CONFLICT DO NOTHING;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.cash_transfers SET status='posted',currency=from_box.currency,posted_at=COALESCE(posted_at,now()) WHERE id=t.id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_cash_transfer(uuid,text);
+CREATE FUNCTION public.cancel_cash_transfer(p_id uuid,p_reason text)
+RETURNS public.cash_transfers LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE t public.cash_transfers%ROWTYPE; v_target_balance numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء التحويل';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO t FROM public.cash_transfers WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'التحويل غير موجود'; END IF;
+  IF t.status='cancelled' THEN RETURN t; END IF;
+  IF t.status='posted' THEN
+    PERFORM id FROM public.cashboxes
+    WHERE id IN(t.from_cashbox_id,t.to_cashbox_id) ORDER BY id FOR UPDATE;
+    SELECT current_balance INTO v_target_balance FROM public.cashbox_balances WHERE id=t.to_cashbox_id;
+    IF COALESCE(v_target_balance,0)<t.amount THEN
+      RAISE EXCEPTION 'لا يمكن عكس التحويل لأن رصيد الصندوق الهدف أقل من المبلغ. المتاح % والمطلوب %',COALESCE(v_target_balance,0),t.amount;
+    END IF;
+    INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+    VALUES(t.to_cashbox_id,'refund','cash_transfers',t.id,t.amount,0,t.currency,'عكس تحويل وارد - '||t.transfer_no,auth.uid()) ON CONFLICT DO NOTHING;
+    INSERT INTO public.cashbox_ledger(cashbox_id,transaction_type,reference_table,reference_id,debit,credit,currency,description,created_by)
+    VALUES(t.from_cashbox_id,'refund','cash_transfers',t.id,0,t.amount,t.currency,'عكس تحويل صادر - '||t.transfer_no,auth.uid()) ON CONFLICT DO NOTHING;
+  END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.cash_transfers
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason)
+  WHERE id=t.id RETURNING * INTO t;
+  RETURN t;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.post_cash_payment(uuid);
+CREATE FUNCTION public.post_cash_payment(p_id uuid)
+RETURNS public.cash_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  payment public.cash_payments%ROWTYPE;
+  beneficiary public.beneficiaries%ROWTYPE;
+  ctx record;
+  assignment public.campaign_distributors%ROWTYPE;
+  v_require_approval boolean;
+  v_role public.app_role;
+  v_remaining numeric(18,2);
+BEGIN
+  v_role:=public.current_user_role();
+  IF v_role NOT IN ('admin','supervisor','accountant','distributor') THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل سند الصرف';
+  END IF;
+  SELECT * INTO payment FROM public.cash_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف غير موجود'; END IF;
+  IF payment.status='posted' THEN RETURN payment; END IF;
+  IF payment.status='cancelled' THEN RAISE EXCEPTION 'سند الصرف ملغي'; END IF;
+  IF payment.amount<=0 THEN RAISE EXCEPTION 'مبلغ الصرف يجب أن يكون أكبر من صفر'; END IF;
+
+  -- Serialise duplicates for the same beneficiary before locking the campaign.
+  SELECT * INTO beneficiary FROM public.beneficiaries
+  WHERE id=payment.beneficiary_id FOR UPDATE;
+  IF NOT FOUND OR beneficiary.status<>'approved' THEN RAISE EXCEPTION 'المستفيد غير موجود أو غير معتمد'; END IF;
+  PERFORM 1 FROM public.campaigns WHERE id=payment.campaign_id FOR UPDATE;
+
+  SELECT COALESCE(require_payment_approval,true) INTO v_require_approval
+  FROM public.system_settings WHERE id=1;
+  IF v_role='distributor' AND v_require_approval AND payment.status<>'approved' THEN
+    RAISE EXCEPTION 'سند الموزع يحتاج اعتماد المشرف قبل الترحيل';
+  END IF;
+  IF NULLIF(trim(payment.override_reason),'') IS NOT NULL AND v_role<>'admin' THEN
+    RAISE EXCEPTION 'الاستثناء من منع التكرار متاح لمدير النظام فقط';
+  END IF;
+  IF EXISTS(
+    SELECT 1 FROM public.cash_payments other
+    WHERE other.id<>payment.id AND other.beneficiary_id=payment.beneficiary_id
+      AND other.campaign_id=payment.campaign_id AND other.status='posted'
+  ) AND NULLIF(trim(payment.override_reason),'') IS NULL THEN
+    RAISE EXCEPTION 'المستفيد استلم سابقاً من هذه الحملة';
+  END IF;
+
+  SELECT * INTO ctx FROM public.get_cash_payment_context(
+    payment.beneficiary_id,payment.campaign_id,payment.delegate_id
+  );
+  IF NOT FOUND THEN RAISE EXCEPTION 'لا يوجد تخصيص نشط أو رصيد متاح لهذا السند'; END IF;
+  IF payment.amount>ctx.available_amount THEN
+    RAISE EXCEPTION 'الرصيد المخصص غير كافٍ. المتاح % والمطلوب %',ctx.available_amount,payment.amount;
+  END IF;
+  SELECT * INTO assignment FROM public.campaign_distributors WHERE id=ctx.assignment_id FOR UPDATE;
+  IF NOT FOUND OR assignment.status<>'active' THEN RAISE EXCEPTION 'تخصيص الموزع غير نشط'; END IF;
+  v_remaining:=assignment.allocated_amount-assignment.spent_amount-assignment.returned_amount;
+  IF v_remaining<payment.amount THEN
+    RAISE EXCEPTION 'رصيد الموزع المخصص غير كافٍ. المتاح % والمطلوب %',v_remaining,payment.amount;
+  END IF;
+
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_distributors
+  SET spent_amount=spent_amount+payment.amount,
+      status=CASE
+        WHEN allocated_amount-(spent_amount+payment.amount)-returned_amount<=0 THEN 'settled'
+        ELSE status
+      END
+  WHERE id=assignment.id;
+  UPDATE public.cash_payments
+  SET delegate_id=ctx.delegate_id,cashbox_id=ctx.cashbox_id,currency=ctx.currency,
+      status='posted',posted_at=COALESCE(posted_at,now()),updated_at=now()
+  WHERE id=payment.id RETURNING * INTO payment;
+  RETURN payment;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_cash_payment(uuid,text);
+CREATE FUNCTION public.cancel_cash_payment(p_id uuid,p_reason text)
+RETURNS public.cash_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE payment public.cash_payments%ROWTYPE; assignment public.campaign_distributors%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء سند الصرف';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO payment FROM public.cash_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف غير موجود'; END IF;
+  IF payment.status='cancelled' THEN RETURN payment; END IF;
+  IF payment.status<>'posted' THEN
+    PERFORM set_config('zakat.internal_financial_update','on',true);
+    UPDATE public.cash_payments
+    SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+    WHERE id=payment.id RETURNING * INTO payment;
+    RETURN payment;
+  END IF;
+  PERFORM 1 FROM public.campaigns WHERE id=payment.campaign_id FOR UPDATE;
+  SELECT * INTO assignment FROM public.campaign_distributors
+  WHERE campaign_id=payment.campaign_id AND delegate_id=payment.delegate_id FOR UPDATE;
+  IF NOT FOUND OR assignment.spent_amount<payment.amount THEN
+    RAISE EXCEPTION 'تعذر عكس الصرف بسبب عدم تطابق إجمالي مصروف الموزع';
+  END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_distributors
+  SET spent_amount=spent_amount-payment.amount,
+      status=CASE WHEN status='settled' THEN 'active' ELSE status END
+  WHERE id=assignment.id;
+  UPDATE public.cash_payments
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+  WHERE id=payment.id RETURNING * INTO payment;
+  UPDATE public.distribution_assignments
+  SET delivery_status='cancelled',delivered_at=NULL
+  WHERE payment_id=payment.id;
+  RETURN payment;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.settle_campaign_distributor(uuid,text);
+CREATE FUNCTION public.settle_campaign_distributor(p_id uuid,p_reason text DEFAULT NULL)
+RETURNS public.campaign_distributors LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE assignment public.campaign_distributors%ROWTYPE; v_remaining numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بتسوية تخصيص الموزع';
+  END IF;
+  SELECT * INTO assignment FROM public.campaign_distributors WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'تخصيص الموزع غير موجود'; END IF;
+  PERFORM 1 FROM public.campaigns WHERE id=assignment.campaign_id FOR UPDATE;
+  v_remaining:=assignment.allocated_amount-assignment.spent_amount-assignment.returned_amount;
+  IF v_remaining<0 THEN RAISE EXCEPTION 'بيانات التخصيص غير متوازنة'; END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_distributors
+  SET returned_amount=returned_amount+v_remaining,status='settled',
+      notes=concat_ws(E'\n',notes,
+        CASE WHEN NULLIF(trim(p_reason),'') IS NULL THEN 'تمت تسوية كامل المتبقي'
+             ELSE 'سبب التسوية: '||trim(p_reason) END)
+  WHERE id=assignment.id RETURNING * INTO assignment;
+  RETURN assignment;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(text,numeric);
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(text,numeric,uuid);
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(uuid,numeric,uuid,uuid);
+DROP FUNCTION IF EXISTS public.quick_deliver_cash(uuid,numeric,uuid,uuid,uuid);
+CREATE FUNCTION public.quick_deliver_cash(
+  p_beneficiary_id uuid,
+  p_amount numeric,
+  p_campaign_id uuid,
+  p_cashbox_id uuid,
+  p_delegate_id uuid DEFAULT NULL
+)
+RETURNS public.cash_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE ctx record; v_payment uuid; result public.cash_payments; v_name text;
+BEGIN
+  IF p_amount IS NULL OR p_amount<=0 THEN RAISE EXCEPTION 'المبلغ يجب أن يكون أكبر من صفر'; END IF;
+  SELECT * INTO ctx FROM public.get_cash_payment_context(p_beneficiary_id,p_campaign_id,p_delegate_id);
+  IF NOT FOUND THEN RAISE EXCEPTION 'لا يوجد تخصيص صالح أو رصيد متاح لهذا المستفيد'; END IF;
+  IF ctx.campaign_id IS DISTINCT FROM p_campaign_id OR ctx.cashbox_id IS DISTINCT FROM p_cashbox_id THEN
+    RAISE EXCEPTION 'تغيّر تخصيص المستفيد؛ أعد اختياره';
+  END IF;
+  IF p_amount>ctx.available_amount THEN
+    RAISE EXCEPTION 'المبلغ يتجاوز المتاح. المتاح %',ctx.available_amount;
+  END IF;
+  SELECT full_name INTO v_name FROM public.beneficiaries WHERE id=p_beneficiary_id;
+  INSERT INTO public.cash_payments(
+    payment_date,delegate_id,beneficiary_id,campaign_id,cashbox_id,amount,currency,
+    delivery_method,receipt_status,actual_recipient,status,created_by,notes
+  ) VALUES(
+    current_date,ctx.delegate_id,p_beneficiary_id,ctx.campaign_id,ctx.cashbox_id,p_amount,ctx.currency,
+    'cash','received',v_name,'approved',auth.uid(),'تسليم سريع مع تحقق فوري من التخصيص والرصيد'
+  ) RETURNING id INTO v_payment;
+  result:=public.post_cash_payment(v_payment);
+  INSERT INTO public.distribution_assignments(
+    beneficiary_id,delegate_id,campaign_id,amount,delivery_status,delivered_at,payment_id
+  ) VALUES(
+    p_beneficiary_id,ctx.delegate_id,ctx.campaign_id,p_amount,'received',now(),v_payment
+  );
+  RETURN result;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.confirm_cash_payment_receipt(uuid);
+CREATE FUNCTION public.confirm_cash_payment_receipt(p_id uuid)
+RETURNS public.cash_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE payment public.cash_payments%ROWTYPE;
+BEGIN
+  SELECT * INTO payment FROM public.cash_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف غير موجود'; END IF;
+  IF NOT (public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[])
+      OR payment.delegate_id=public.current_delegate_id()) THEN
+    RAISE EXCEPTION 'غير مصرح بتأكيد الاستلام';
+  END IF;
+  IF payment.status<>'posted' THEN RAISE EXCEPTION 'يجب ترحيل السند قبل تأكيد الاستلام'; END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.cash_payments SET receipt_status='received',updated_at=now()
+  WHERE id=payment.id RETURNING * INTO payment;
+  RETURN payment;
+END; $$;
+
+-- In-kind receipts always enter a warehouse. Campaign funding is the separate,
+-- auditable operation that moves quantities from the warehouse to a campaign.
+DROP FUNCTION IF EXISTS public.post_in_kind_receipt(uuid);
+CREATE FUNCTION public.post_in_kind_receipt(p_id uuid)
+RETURNS public.in_kind_receipts LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE receipt public.in_kind_receipts%ROWTYPE; detail public.in_kind_receipt_details%ROWTYPE; v_lot uuid;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل سند القبض العيني';
+  END IF;
+  SELECT * INTO receipt FROM public.in_kind_receipts WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند القبض العيني غير موجود'; END IF;
+  IF receipt.status='posted' THEN RETURN receipt; END IF;
+  IF receipt.status='cancelled' THEN RAISE EXCEPTION 'السند ملغي'; END IF;
+  IF receipt.warehouse_id IS NULL THEN RAISE EXCEPTION 'يجب اختيار المخزن المستلم'; END IF;
+  PERFORM 1 FROM public.warehouses WHERE id=receipt.warehouse_id AND is_active=true FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المخزن غير موجود أو موقوف'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.in_kind_receipt_details WHERE receipt_id=receipt.id) THEN
+    RAISE EXCEPTION 'السند لا يحتوي أصنافاً';
+  END IF;
+  FOR detail IN SELECT * FROM public.in_kind_receipt_details WHERE receipt_id=receipt.id ORDER BY id LOOP
+    IF detail.quantity<=0 OR detail.valid_qty<0 OR detail.damaged_qty<0
+       OR detail.valid_qty+detail.damaged_qty<>detail.quantity THEN
+      RAISE EXCEPTION 'تفصيل الصنف غير متوازن: الكلية يجب أن تساوي الصالحة مع التالفة';
+    END IF;
+    IF detail.valid_qty<=0 THEN RAISE EXCEPTION 'الكمية الصالحة يجب أن تكون أكبر من صفر'; END IF;
+    IF detail.expiry_date IS NOT NULL AND detail.expiry_date<=current_date THEN
+      RAISE EXCEPTION 'لا يمكن ترحيل صنف منتهي الصلاحية';
+    END IF;
+    INSERT INTO public.inventory_lots(
+      item_id,warehouse_id,campaign_id,delegate_id,source_receipt_detail_id,
+      lot_no,expiry_date,quantity_received,quantity_damaged,quantity_available
+    ) VALUES(
+      detail.item_id,receipt.warehouse_id,NULL,NULL,detail.id,
+      detail.lot_no,detail.expiry_date,detail.quantity,detail.damaged_qty,detail.valid_qty
+    ) RETURNING id INTO v_lot;
+    INSERT INTO public.inventory_movements(
+      lot_id,item_id,movement_type,quantity,source_table,source_id,source_detail_id
+    ) VALUES(v_lot,detail.item_id,'in',detail.valid_qty,'in_kind_receipts',receipt.id,detail.id);
+  END LOOP;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.in_kind_receipts
+  SET status='posted',posted_at=COALESCE(posted_at,now()),campaign_id=NULL,delegate_id=NULL,updated_at=now()
+  WHERE id=receipt.id RETURNING * INTO receipt;
+  RETURN receipt;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_in_kind_receipt(uuid,text);
+CREATE FUNCTION public.cancel_in_kind_receipt(p_id uuid,p_reason text)
+RETURNS public.in_kind_receipts LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE receipt public.in_kind_receipts%ROWTYPE; lot public.inventory_lots%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء سند القبض العيني';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO receipt FROM public.in_kind_receipts WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند القبض العيني غير موجود'; END IF;
+  IF receipt.status='cancelled' THEN RETURN receipt; END IF;
+  IF receipt.status='posted' THEN
+    PERFORM 1 FROM public.warehouses WHERE id=receipt.warehouse_id FOR UPDATE;
+    FOR lot IN
+      SELECT l.* FROM public.inventory_lots l
+      JOIN public.in_kind_receipt_details d ON d.id=l.source_receipt_detail_id
+      WHERE d.receipt_id=receipt.id ORDER BY l.id FOR UPDATE OF l
+    LOOP
+      IF lot.quantity_available<>lot.quantity_received-lot.quantity_damaged THEN
+        RAISE EXCEPTION 'لا يمكن إلغاء السند لأن جزءاً من مخزون الصنف % نُقل أو صُرف',lot.item_id;
+      END IF;
+    END LOOP;
+    UPDATE public.inventory_lots l SET quantity_available=0
+    FROM public.in_kind_receipt_details d
+    WHERE d.id=l.source_receipt_detail_id AND d.receipt_id=receipt.id;
+    UPDATE public.inventory_movements SET reversed_at=now()
+    WHERE source_table='in_kind_receipts' AND source_id=receipt.id AND reversed_at IS NULL;
+  END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.in_kind_receipts
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+  WHERE id=receipt.id RETURNING * INTO receipt;
+  RETURN receipt;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.post_campaign_in_kind_funding(uuid);
+CREATE FUNCTION public.post_campaign_in_kind_funding(p_id uuid)
+RETURNS public.campaign_in_kind_funding LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  funding public.campaign_in_kind_funding%ROWTYPE;
+  detail public.campaign_in_kind_funding_details%ROWTYPE;
+  source_lot public.inventory_lots%ROWTYPE;
+  v_available numeric(18,3);
+  v_needed numeric(18,3);
+  v_take numeric(18,3);
+  v_target uuid;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل تمويل الحملة العيني';
+  END IF;
+  SELECT * INTO funding FROM public.campaign_in_kind_funding WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'تمويل الحملة العيني غير موجود'; END IF;
+  IF funding.status='posted' THEN RETURN funding; END IF;
+  IF funding.status='cancelled' THEN RAISE EXCEPTION 'تمويل الحملة العيني ملغي'; END IF;
+  PERFORM 1 FROM public.campaigns
+  WHERE id=funding.campaign_id AND status='open' AND campaign_type IN ('in_kind','mixed') FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الحملة غير مفتوحة أو لا تقبل تمويلاً عينياً'; END IF;
+  PERFORM 1 FROM public.warehouses WHERE id=funding.warehouse_id AND is_active=true FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المخزن غير موجود أو موقوف'; END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.campaign_in_kind_funding_details WHERE funding_id=funding.id) THEN
+    RAISE EXCEPTION 'لم يتم اختيار أصناف للتمويل';
+  END IF;
+
+  FOR detail IN
+    SELECT * FROM public.campaign_in_kind_funding_details WHERE funding_id=funding.id ORDER BY item_id
+  LOOP
+    PERFORM id FROM public.inventory_lots
+    WHERE warehouse_id=funding.warehouse_id AND campaign_id IS NULL AND item_id=detail.item_id
+      AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date)
+    ORDER BY expiry_date NULLS LAST,created_at,id FOR UPDATE;
+    SELECT COALESCE(SUM(quantity_available),0) INTO v_available
+    FROM public.inventory_lots
+    WHERE warehouse_id=funding.warehouse_id AND campaign_id IS NULL AND item_id=detail.item_id
+      AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date);
+    IF v_available<detail.quantity THEN
+      RAISE EXCEPTION 'رصيد المخزن غير كاف للصنف %. المتاح % والمطلوب %',detail.item_id,v_available,detail.quantity;
+    END IF;
+    v_needed:=detail.quantity;
+    FOR source_lot IN
+      SELECT * FROM public.inventory_lots
+      WHERE warehouse_id=funding.warehouse_id AND campaign_id IS NULL AND item_id=detail.item_id
+        AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date)
+      ORDER BY expiry_date NULLS LAST,created_at,id FOR UPDATE
+    LOOP
+      EXIT WHEN v_needed<=0;
+      v_take:=LEAST(v_needed,source_lot.quantity_available);
+      UPDATE public.inventory_lots SET quantity_available=quantity_available-v_take WHERE id=source_lot.id;
+      INSERT INTO public.inventory_movements(lot_id,item_id,movement_type,quantity,source_table,source_id,source_detail_id)
+      VALUES(source_lot.id,detail.item_id,'out',v_take,'campaign_in_kind_funding',funding.id,detail.id);
+      INSERT INTO public.inventory_lots(
+        item_id,warehouse_id,campaign_id,delegate_id,lot_no,expiry_date,
+        quantity_received,quantity_damaged,quantity_available
+      ) VALUES(
+        detail.item_id,funding.warehouse_id,funding.campaign_id,NULL,source_lot.lot_no,source_lot.expiry_date,
+        v_take,0,v_take
+      ) RETURNING id INTO v_target;
+      INSERT INTO public.inventory_movements(lot_id,item_id,movement_type,quantity,source_table,source_id,source_detail_id)
+      VALUES(v_target,detail.item_id,'in',v_take,'campaign_in_kind_funding',funding.id,detail.id);
+      v_needed:=v_needed-v_take;
+    END LOOP;
+    IF v_needed>0 THEN RAISE EXCEPTION 'تعذر إكمال نقل الصنف %؛ المتبقي %',detail.item_id,v_needed; END IF;
+  END LOOP;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_in_kind_funding
+  SET status='posted',posted_at=COALESCE(posted_at,now()),updated_at=now()
+  WHERE id=funding.id RETURNING * INTO funding;
+  RETURN funding;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_campaign_in_kind_funding(uuid,text);
+CREATE FUNCTION public.cancel_campaign_in_kind_funding(p_id uuid,p_reason text)
+RETURNS public.campaign_in_kind_funding LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE funding public.campaign_in_kind_funding%ROWTYPE; movement public.inventory_movements%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء تمويل الحملة العيني';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO funding FROM public.campaign_in_kind_funding WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'تمويل الحملة العيني غير موجود'; END IF;
+  IF funding.status='cancelled' THEN RETURN funding; END IF;
+  IF funding.status='posted' THEN
+    PERFORM 1 FROM public.campaigns WHERE id=funding.campaign_id FOR UPDATE;
+    PERFORM 1 FROM public.warehouses WHERE id=funding.warehouse_id FOR UPDATE;
+    FOR movement IN
+      SELECT * FROM public.inventory_movements
+      WHERE source_table='campaign_in_kind_funding' AND source_id=funding.id
+        AND movement_type='in' AND reversed_at IS NULL
+      ORDER BY id FOR UPDATE
+    LOOP
+      IF (SELECT quantity_available FROM public.inventory_lots WHERE id=movement.lot_id FOR UPDATE)<movement.quantity THEN
+        RAISE EXCEPTION 'لا يمكن إلغاء التمويل لأن جزءاً من الصنف % صُرف من الحملة',movement.item_id;
+      END IF;
+    END LOOP;
+    FOR movement IN
+      SELECT * FROM public.inventory_movements
+      WHERE source_table='campaign_in_kind_funding' AND source_id=funding.id
+        AND reversed_at IS NULL ORDER BY movement_type,id FOR UPDATE
+    LOOP
+      IF movement.movement_type='in' THEN
+        UPDATE public.inventory_lots SET quantity_available=quantity_available-movement.quantity WHERE id=movement.lot_id;
+      ELSIF movement.movement_type='out' THEN
+        UPDATE public.inventory_lots SET quantity_available=quantity_available+movement.quantity WHERE id=movement.lot_id;
+      END IF;
+      UPDATE public.inventory_movements SET reversed_at=now() WHERE id=movement.id;
+    END LOOP;
+  END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.campaign_in_kind_funding
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+  WHERE id=funding.id RETURNING * INTO funding;
+  RETURN funding;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.enforce_in_kind_payment_context()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_role public.app_role;
+  v_beneficiary_delegate uuid;
+  v_internal boolean:=COALESCE(current_setting('zakat.internal_financial_update',true),'')='on';
+BEGIN
+  IF v_internal THEN RETURN NEW; END IF;
+  v_role:=public.current_user_role();
+  IF v_role NOT IN ('admin','supervisor','warehouse','distributor') THEN
+    RAISE EXCEPTION 'غير مصرح بإنشاء سند صرف عيني';
+  END IF;
+  IF TG_OP='UPDATE' AND OLD.status IN ('posted','cancelled') THEN
+    RAISE EXCEPTION 'لا يمكن تعديل سند صرف عيني مرحل أو ملغي';
+  END IF;
+  SELECT delegate_id INTO v_beneficiary_delegate
+  FROM public.beneficiaries WHERE id=NEW.beneficiary_id AND status='approved';
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستفيد غير موجود أو غير معتمد'; END IF;
+  IF v_role='admin' THEN
+    NEW.delegate_id:=COALESCE(NEW.delegate_id,v_beneficiary_delegate);
+  ELSE
+    IF NEW.delegate_id IS NOT NULL AND NEW.delegate_id IS DISTINCT FROM v_beneficiary_delegate THEN
+      RAISE EXCEPTION 'لا يستطيع تغيير موزع المستفيد إلا مدير النظام';
+    END IF;
+    NEW.delegate_id:=v_beneficiary_delegate;
+  END IF;
+  IF NEW.delegate_id IS NULL OR NOT EXISTS(
+    SELECT 1 FROM public.delegates d WHERE d.id=NEW.delegate_id AND d.is_active=true
+  ) THEN RAISE EXCEPTION 'المستفيد غير مربوط بموزع نشط'; END IF;
+  IF v_role='distributor' AND NEW.delegate_id IS DISTINCT FROM public.current_delegate_id() THEN
+    RAISE EXCEPTION 'المستفيد غير مرتبط بحساب الموزع الحالي';
+  END IF;
+  IF NULLIF(trim(NEW.override_reason),'') IS NOT NULL AND v_role<>'admin' THEN
+    RAISE EXCEPTION 'الاستثناء من منع التكرار متاح لمدير النظام فقط';
+  END IF;
+  IF NOT EXISTS(
+    SELECT 1 FROM public.campaigns c
+    WHERE c.id=NEW.campaign_id AND c.status='open' AND c.campaign_type IN ('in_kind','mixed')
+  ) THEN RAISE EXCEPTION 'الحملة غير مفتوحة أو لا تسمح بالصرف العيني'; END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS enforce_in_kind_payment_context_trigger ON public.in_kind_payments;
+CREATE TRIGGER enforce_in_kind_payment_context_trigger
+BEFORE INSERT OR UPDATE ON public.in_kind_payments
+FOR EACH ROW EXECUTE FUNCTION public.enforce_in_kind_payment_context();
+
+DROP FUNCTION IF EXISTS public.post_in_kind_payment(uuid);
+CREATE FUNCTION public.post_in_kind_payment(p_id uuid)
+RETURNS public.in_kind_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  payment public.in_kind_payments%ROWTYPE;
+  detail public.in_kind_payment_details%ROWTYPE;
+  lot public.inventory_lots%ROWTYPE;
+  v_available numeric(18,3);
+  v_needed numeric(18,3);
+  v_take numeric(18,3);
+  v_require_approval boolean;
+  v_role public.app_role;
+BEGIN
+  v_role:=public.current_user_role();
+  IF v_role NOT IN ('admin','supervisor','warehouse','distributor') THEN
+    RAISE EXCEPTION 'غير مصرح بترحيل الصرف العيني';
+  END IF;
+  SELECT * INTO payment FROM public.in_kind_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف العيني غير موجود'; END IF;
+  IF payment.status='posted' THEN RETURN payment; END IF;
+  IF payment.status='cancelled' THEN RAISE EXCEPTION 'السند ملغي'; END IF;
+  PERFORM 1 FROM public.beneficiaries WHERE id=payment.beneficiary_id AND status='approved' FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'المستفيد غير موجود أو غير معتمد'; END IF;
+  PERFORM 1 FROM public.campaigns
+  WHERE id=payment.campaign_id AND status='open' AND campaign_type IN ('in_kind','mixed') FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الحملة غير مفتوحة أو لا تسمح بالصرف العيني'; END IF;
+  IF v_role='distributor' AND payment.delegate_id IS DISTINCT FROM public.current_delegate_id() THEN
+    RAISE EXCEPTION 'السند غير مرتبط بحساب الموزع الحالي';
+  END IF;
+  SELECT COALESCE(require_payment_approval,true) INTO v_require_approval FROM public.system_settings WHERE id=1;
+  IF v_role='distributor' AND v_require_approval AND payment.status<>'approved' THEN
+    RAISE EXCEPTION 'سند الموزع يحتاج اعتماد المشرف قبل الترحيل';
+  END IF;
+  IF NULLIF(trim(payment.override_reason),'') IS NOT NULL AND v_role<>'admin' THEN
+    RAISE EXCEPTION 'الاستثناء من منع التكرار متاح لمدير النظام فقط';
+  END IF;
+  IF EXISTS(
+    SELECT 1 FROM public.in_kind_payments other
+    WHERE other.id<>payment.id AND other.beneficiary_id=payment.beneficiary_id
+      AND other.campaign_id=payment.campaign_id AND other.status='posted'
+      AND (payment.basket_id IS NULL OR other.basket_id=payment.basket_id)
+  ) AND NULLIF(trim(payment.override_reason),'') IS NULL THEN
+    RAISE EXCEPTION 'المستفيد استلم هذه المساعدة سابقاً';
+  END IF;
+  IF payment.distribution_type='basket' THEN
+    IF payment.basket_id IS NULL OR NOT EXISTS(
+      SELECT 1 FROM public.baskets b
+      WHERE b.id=payment.basket_id AND b.campaign_id=payment.campaign_id AND b.is_active=true
+    ) THEN RAISE EXCEPTION 'السلة غير نشطة أو لا تتبع الحملة'; END IF;
+    IF NOT EXISTS(SELECT 1 FROM public.in_kind_payment_details WHERE payment_id=payment.id) THEN
+      INSERT INTO public.in_kind_payment_details(payment_id,item_id,quantity)
+      SELECT payment.id,bi.item_id,bi.quantity FROM public.basket_items bi WHERE bi.basket_id=payment.basket_id;
+    END IF;
+  END IF;
+  IF NOT EXISTS(SELECT 1 FROM public.in_kind_payment_details WHERE payment_id=payment.id) THEN
+    RAISE EXCEPTION 'السند لا يحتوي أصنافاً';
+  END IF;
+
+  FOR detail IN
+    SELECT * FROM public.in_kind_payment_details WHERE payment_id=payment.id ORDER BY item_id
+  LOOP
+    SELECT COALESCE(SUM(quantity_available),0) INTO v_available
+    FROM public.inventory_lots
+    WHERE item_id=detail.item_id AND campaign_id=payment.campaign_id
+      AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date);
+    IF v_available<detail.quantity THEN
+      RAISE EXCEPTION 'رصيد الحملة العيني غير كاف للصنف %. المتاح % والمطلوب %',detail.item_id,v_available,detail.quantity;
+    END IF;
+    v_needed:=detail.quantity;
+    FOR lot IN
+      SELECT * FROM public.inventory_lots
+      WHERE item_id=detail.item_id AND campaign_id=payment.campaign_id
+        AND quantity_available>0 AND (expiry_date IS NULL OR expiry_date>current_date)
+      ORDER BY expiry_date NULLS LAST,created_at,id FOR UPDATE
+    LOOP
+      EXIT WHEN v_needed<=0;
+      v_take:=LEAST(v_needed,lot.quantity_available);
+      UPDATE public.inventory_lots SET quantity_available=quantity_available-v_take WHERE id=lot.id;
+      INSERT INTO public.inventory_movements(lot_id,item_id,movement_type,quantity,source_table,source_id,source_detail_id)
+      VALUES(lot.id,detail.item_id,'out',v_take,'in_kind_payments',payment.id,detail.id);
+      v_needed:=v_needed-v_take;
+    END LOOP;
+    IF v_needed>0 THEN RAISE EXCEPTION 'تعذر إكمال صرف الصنف %؛ المتبقي %',detail.item_id,v_needed; END IF;
+  END LOOP;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.in_kind_payments
+  SET status='posted',posted_at=COALESCE(posted_at,now()),updated_at=now()
+  WHERE id=payment.id RETURNING * INTO payment;
+  RETURN payment;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.cancel_in_kind_payment(uuid,text);
+CREATE FUNCTION public.cancel_in_kind_payment(p_id uuid,p_reason text)
+RETURNS public.in_kind_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE payment public.in_kind_payments%ROWTYPE; movement public.inventory_movements%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإلغاء الصرف العيني';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب الإلغاء مطلوب'; END IF;
+  SELECT * INTO payment FROM public.in_kind_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف العيني غير موجود'; END IF;
+  IF payment.status='cancelled' THEN RETURN payment; END IF;
+  IF payment.status<>'posted' THEN
+    PERFORM set_config('zakat.internal_financial_update','on',true);
+    UPDATE public.in_kind_payments
+    SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+    WHERE id=payment.id RETURNING * INTO payment;
+    RETURN payment;
+  END IF;
+  PERFORM 1 FROM public.campaigns WHERE id=payment.campaign_id FOR UPDATE;
+  FOR movement IN
+    SELECT * FROM public.inventory_movements
+    WHERE source_table='in_kind_payments' AND source_id=payment.id
+      AND movement_type='out' AND reversed_at IS NULL ORDER BY id FOR UPDATE
+  LOOP
+    UPDATE public.inventory_lots SET quantity_available=quantity_available+movement.quantity WHERE id=movement.lot_id;
+    UPDATE public.inventory_movements SET reversed_at=now() WHERE id=movement.id;
+  END LOOP;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.in_kind_payments
+  SET status='cancelled',cancelled_at=now(),cancellation_reason=trim(p_reason),updated_at=now()
+  WHERE id=payment.id RETURNING * INTO payment;
+  RETURN payment;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.confirm_in_kind_payment_receipt(uuid);
+CREATE FUNCTION public.confirm_in_kind_payment_receipt(p_id uuid)
+RETURNS public.in_kind_payments LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE payment public.in_kind_payments%ROWTYPE;
+BEGIN
+  SELECT * INTO payment FROM public.in_kind_payments WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف العيني غير موجود'; END IF;
+  IF NOT (public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[])
+      OR payment.delegate_id=public.current_delegate_id()) THEN
+    RAISE EXCEPTION 'غير مصرح بتأكيد الاستلام';
+  END IF;
+  IF payment.status<>'posted' THEN RAISE EXCEPTION 'يجب ترحيل السند قبل تأكيد الاستلام'; END IF;
+  PERFORM set_config('zakat.internal_financial_update','on',true);
+  UPDATE public.in_kind_payments SET receipt_status='received',updated_at=now()
+  WHERE id=payment.id RETURNING * INTO payment;
+  RETURN payment;
+END; $$;
+
+-- Atomic draft writers keep parent rows and their detail rows in one database
+-- transaction. A detail validation error cannot leave an orphan parent draft.
+DROP FUNCTION IF EXISTS public.save_in_kind_receipt_draft(jsonb,jsonb,uuid);
+CREATE FUNCTION public.save_in_kind_receipt_draft(p_record jsonb,p_details jsonb,p_id uuid DEFAULT NULL)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_id uuid; v_key uuid; v_status public.document_status; current_row public.in_kind_receipts%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بحفظ سند القبض العيني';
+  END IF;
+  v_status:=COALESCE(NULLIF(p_record->>'status',''),'draft')::public.document_status;
+  IF v_status IN ('posted','cancelled') THEN RAISE EXCEPTION 'الحفظ متاح للمسودة أو المراجعة أو الاعتماد فقط'; END IF;
+  IF jsonb_array_length(COALESCE(p_details,'[]'::jsonb))=0 THEN RAISE EXCEPTION 'أضف صنفاً واحداً على الأقل'; END IF;
+  IF p_id IS NULL THEN
+    v_key:=COALESCE(NULLIF(p_record->>'idempotency_key','')::uuid,gen_random_uuid());
+    SELECT id INTO v_id FROM public.in_kind_receipts WHERE idempotency_key=v_key;
+    IF FOUND THEN RETURN v_id; END IF;
+    INSERT INTO public.in_kind_receipts(
+      receipt_date,donor_id,warehouse_id,campaign_id,delegate_id,notes,status,idempotency_key,created_by
+    ) VALUES(
+      COALESCE(NULLIF(p_record->>'receipt_date','')::date,current_date),
+      (p_record->>'donor_id')::uuid,(p_record->>'warehouse_id')::uuid,NULL,NULL,
+      NULLIF(p_record->>'notes',''),v_status,v_key,auth.uid()
+    ) RETURNING id INTO v_id;
+  ELSE
+    SELECT * INTO current_row FROM public.in_kind_receipts WHERE id=p_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'سند القبض العيني غير موجود'; END IF;
+    IF current_row.status IN ('posted','cancelled') THEN RAISE EXCEPTION 'لا يمكن تعديل سند مرحل أو ملغي'; END IF;
+    UPDATE public.in_kind_receipts SET
+      receipt_date=COALESCE(NULLIF(p_record->>'receipt_date','')::date,receipt_date),
+      donor_id=COALESCE(NULLIF(p_record->>'donor_id','')::uuid,donor_id),
+      warehouse_id=COALESCE(NULLIF(p_record->>'warehouse_id','')::uuid,warehouse_id),
+      campaign_id=NULL,delegate_id=NULL,notes=NULLIF(p_record->>'notes',''),status=v_status,updated_at=now()
+    WHERE id=p_id;
+    v_id:=p_id;
+    DELETE FROM public.in_kind_receipt_details WHERE receipt_id=v_id;
+  END IF;
+  INSERT INTO public.in_kind_receipt_details(
+    receipt_id,item_id,quantity,valid_qty,damaged_qty,lot_no,expiry_date
+  )
+  SELECT v_id,x.item_id,x.quantity,x.valid_qty,COALESCE(x.damaged_qty,0),x.lot_no,x.expiry_date
+  FROM jsonb_to_recordset(COALESCE(p_details,'[]'::jsonb)) AS x(
+    item_id uuid,quantity numeric,valid_qty numeric,damaged_qty numeric,lot_no text,expiry_date date
+  );
+  RETURN v_id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.save_campaign_in_kind_funding_draft(jsonb,jsonb,uuid);
+CREATE FUNCTION public.save_campaign_in_kind_funding_draft(p_record jsonb,p_details jsonb,p_id uuid DEFAULT NULL)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_id uuid; v_key uuid; v_status public.document_status; current_row public.campaign_in_kind_funding%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بحفظ تمويل الحملة العيني';
+  END IF;
+  v_status:=COALESCE(NULLIF(p_record->>'status',''),'draft')::public.document_status;
+  IF v_status IN ('posted','cancelled') THEN RAISE EXCEPTION 'الحفظ متاح للمسودة أو المراجعة أو الاعتماد فقط'; END IF;
+  IF jsonb_array_length(COALESCE(p_details,'[]'::jsonb))=0 THEN RAISE EXCEPTION 'أضف صنفاً واحداً على الأقل'; END IF;
+  IF p_id IS NULL THEN
+    v_key:=COALESCE(NULLIF(p_record->>'idempotency_key','')::uuid,gen_random_uuid());
+    SELECT id INTO v_id FROM public.campaign_in_kind_funding WHERE idempotency_key=v_key;
+    IF FOUND THEN RETURN v_id; END IF;
+    INSERT INTO public.campaign_in_kind_funding(
+      funding_date,campaign_id,warehouse_id,notes,status,idempotency_key,created_by
+    ) VALUES(
+      COALESCE(NULLIF(p_record->>'funding_date','')::date,current_date),
+      (p_record->>'campaign_id')::uuid,(p_record->>'warehouse_id')::uuid,
+      NULLIF(p_record->>'notes',''),v_status,v_key,auth.uid()
+    ) RETURNING id INTO v_id;
+  ELSE
+    SELECT * INTO current_row FROM public.campaign_in_kind_funding WHERE id=p_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'تمويل الحملة العيني غير موجود'; END IF;
+    IF current_row.status IN ('posted','cancelled') THEN RAISE EXCEPTION 'لا يمكن تعديل تمويل مرحل أو ملغي'; END IF;
+    UPDATE public.campaign_in_kind_funding SET
+      funding_date=COALESCE(NULLIF(p_record->>'funding_date','')::date,funding_date),
+      campaign_id=COALESCE(NULLIF(p_record->>'campaign_id','')::uuid,campaign_id),
+      warehouse_id=COALESCE(NULLIF(p_record->>'warehouse_id','')::uuid,warehouse_id),
+      notes=NULLIF(p_record->>'notes',''),status=v_status,updated_at=now()
+    WHERE id=p_id;
+    v_id:=p_id;
+    DELETE FROM public.campaign_in_kind_funding_details WHERE funding_id=v_id;
+  END IF;
+  INSERT INTO public.campaign_in_kind_funding_details(funding_id,item_id,quantity)
+  SELECT v_id,x.item_id,x.quantity
+  FROM jsonb_to_recordset(COALESCE(p_details,'[]'::jsonb)) AS x(item_id uuid,quantity numeric);
+  RETURN v_id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.save_in_kind_payment_draft(jsonb,jsonb,uuid);
+CREATE FUNCTION public.save_in_kind_payment_draft(p_record jsonb,p_details jsonb,p_id uuid DEFAULT NULL)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_id uuid; v_key uuid; v_status public.document_status; v_type public.distribution_type; current_row public.in_kind_payments%ROWTYPE;
+BEGIN
+  IF public.current_user_role() NOT IN ('admin','supervisor','warehouse','distributor') THEN
+    RAISE EXCEPTION 'غير مصرح بحفظ سند الصرف العيني';
+  END IF;
+  v_status:=COALESCE(NULLIF(p_record->>'status',''),'draft')::public.document_status;
+  v_type:=COALESCE(NULLIF(p_record->>'distribution_type',''),'basket')::public.distribution_type;
+  IF v_status IN ('posted','cancelled') THEN RAISE EXCEPTION 'الحفظ متاح للمسودة أو المراجعة أو الاعتماد فقط'; END IF;
+  IF v_type='manual' AND jsonb_array_length(COALESCE(p_details,'[]'::jsonb))=0 THEN
+    RAISE EXCEPTION 'أضف صنفاً واحداً على الأقل للصرف اليدوي';
+  END IF;
+  IF p_id IS NULL THEN
+    v_key:=COALESCE(NULLIF(p_record->>'idempotency_key','')::uuid,gen_random_uuid());
+    SELECT id INTO v_id FROM public.in_kind_payments WHERE idempotency_key=v_key;
+    IF FOUND THEN RETURN v_id; END IF;
+    INSERT INTO public.in_kind_payments(
+      payment_date,beneficiary_id,campaign_id,delegate_id,distribution_type,basket_id,
+      receipt_status,actual_recipient,proof_url,override_reason,notes,status,idempotency_key,created_by
+    ) VALUES(
+      COALESCE(NULLIF(p_record->>'payment_date','')::date,current_date),
+      (p_record->>'beneficiary_id')::uuid,(p_record->>'campaign_id')::uuid,
+      NULLIF(p_record->>'delegate_id','')::uuid,v_type,NULLIF(p_record->>'basket_id','')::uuid,
+      COALESCE(NULLIF(p_record->>'receipt_status',''),'pending')::public.receipt_status,
+      NULLIF(p_record->>'actual_recipient',''),NULLIF(p_record->>'proof_url',''),
+      NULLIF(p_record->>'override_reason',''),NULLIF(p_record->>'notes',''),v_status,v_key,auth.uid()
+    ) RETURNING id INTO v_id;
+  ELSE
+    SELECT * INTO current_row FROM public.in_kind_payments WHERE id=p_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'سند الصرف العيني غير موجود'; END IF;
+    IF current_row.status IN ('posted','cancelled') THEN RAISE EXCEPTION 'لا يمكن تعديل سند مرحل أو ملغي'; END IF;
+    UPDATE public.in_kind_payments SET
+      payment_date=COALESCE(NULLIF(p_record->>'payment_date','')::date,payment_date),
+      beneficiary_id=COALESCE(NULLIF(p_record->>'beneficiary_id','')::uuid,beneficiary_id),
+      campaign_id=COALESCE(NULLIF(p_record->>'campaign_id','')::uuid,campaign_id),
+      delegate_id=NULLIF(p_record->>'delegate_id','')::uuid,distribution_type=v_type,
+      basket_id=NULLIF(p_record->>'basket_id','')::uuid,
+      receipt_status=COALESCE(NULLIF(p_record->>'receipt_status',''),'pending')::public.receipt_status,
+      actual_recipient=NULLIF(p_record->>'actual_recipient',''),proof_url=NULLIF(p_record->>'proof_url',''),
+      override_reason=NULLIF(p_record->>'override_reason',''),notes=NULLIF(p_record->>'notes',''),
+      status=v_status,updated_at=now()
+    WHERE id=p_id;
+    v_id:=p_id;
+    DELETE FROM public.in_kind_payment_details WHERE payment_id=v_id;
+  END IF;
+  INSERT INTO public.in_kind_payment_details(payment_id,item_id,quantity)
+  SELECT v_id,x.item_id,x.quantity
+  FROM jsonb_to_recordset(COALESCE(p_details,'[]'::jsonb)) AS x(item_id uuid,quantity numeric);
+  RETURN v_id;
+END; $$;
+
+DROP FUNCTION IF EXISTS public.save_basket_with_items(jsonb,jsonb,uuid);
+CREATE FUNCTION public.save_basket_with_items(p_record jsonb,p_details jsonb,p_id uuid DEFAULT NULL)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_id uuid; v_key uuid; current_row public.baskets%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','warehouse']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بحفظ السلة';
+  END IF;
+  IF jsonb_array_length(COALESCE(p_details,'[]'::jsonb))=0 THEN RAISE EXCEPTION 'أضف مكوناً واحداً على الأقل للسلة'; END IF;
+  IF p_id IS NULL THEN
+    v_key:=COALESCE(NULLIF(p_record->>'idempotency_key','')::uuid,gen_random_uuid());
+    SELECT id INTO v_id FROM public.baskets WHERE idempotency_key=v_key;
+    IF FOUND THEN RETURN v_id; END IF;
+    INSERT INTO public.baskets(name,campaign_id,description,is_active,idempotency_key,created_by)
+    VALUES(
+      trim(p_record->>'name'),(p_record->>'campaign_id')::uuid,NULLIF(p_record->>'description',''),
+      COALESCE((p_record->>'is_active')::boolean,true),v_key,auth.uid()
+    ) RETURNING id INTO v_id;
+  ELSE
+    SELECT * INTO current_row FROM public.baskets WHERE id=p_id FOR UPDATE;
+    IF NOT FOUND THEN RAISE EXCEPTION 'السلة غير موجودة'; END IF;
+    UPDATE public.baskets SET
+      name=COALESCE(NULLIF(trim(p_record->>'name'),''),name),
+      campaign_id=COALESCE(NULLIF(p_record->>'campaign_id','')::uuid,campaign_id),
+      description=NULLIF(p_record->>'description',''),
+      is_active=COALESCE((p_record->>'is_active')::boolean,is_active),updated_at=now()
+    WHERE id=p_id;
+    v_id:=p_id;
+    DELETE FROM public.basket_items WHERE basket_id=v_id;
+  END IF;
+  INSERT INTO public.basket_items(basket_id,item_id,quantity,required)
+  SELECT v_id,x.item_id,x.quantity,COALESCE(x.required,true)
+  FROM jsonb_to_recordset(COALESCE(p_details,'[]'::jsonb)) AS x(item_id uuid,quantity numeric,required boolean);
+  RETURN v_id;
+END; $$;
+
+
+-- Closing uses the current campaign-owned model: posted campaign funding minus
+-- posted payments, plus zero remaining campaign stock for a full close.
+CREATE OR REPLACE FUNCTION public.prepare_account_closing()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_funded numeric(18,2);
+  v_spent numeric(18,2);
+  v_pending integer;
+  v_stock numeric(18,3);
+  v_allocations numeric(18,2);
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإقفال الحسابات';
+  END IF;
+  PERFORM 1 FROM public.campaigns WHERE id=NEW.campaign_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'الحملة غير موجودة'; END IF;
+  SELECT COALESCE(SUM(amount),0) INTO v_funded
+  FROM public.campaign_funding WHERE campaign_id=NEW.campaign_id AND status='posted';
+  SELECT COALESCE(SUM(amount),0) INTO v_spent
+  FROM public.cash_payments WHERE campaign_id=NEW.campaign_id AND status='posted';
+  SELECT
+    (SELECT COUNT(*) FROM public.campaign_funding WHERE campaign_id=NEW.campaign_id AND status NOT IN ('posted','cancelled'))+
+    (SELECT COUNT(*) FROM public.cash_payments WHERE campaign_id=NEW.campaign_id AND status NOT IN ('posted','cancelled'))+
+    (SELECT COUNT(*) FROM public.campaign_in_kind_funding WHERE campaign_id=NEW.campaign_id AND status NOT IN ('posted','cancelled'))+
+    (SELECT COUNT(*) FROM public.in_kind_payments WHERE campaign_id=NEW.campaign_id AND status NOT IN ('posted','cancelled'))
+  INTO v_pending;
+  IF v_pending>0 THEN RAISE EXCEPTION 'توجد سندات مسودة أو معلقة تخص الحملة'; END IF;
+  SELECT COALESCE(SUM(quantity_available),0) INTO v_stock
+  FROM public.inventory_lots WHERE campaign_id=NEW.campaign_id;
+  SELECT COALESCE(SUM(allocated_amount-spent_amount-returned_amount),0) INTO v_allocations
+  FROM public.campaign_distributors WHERE campaign_id=NEW.campaign_id;
+  NEW.total_received:=v_funded;
+  NEW.total_spent:=v_spent;
+  NEW.balance:=v_funded-v_spent;
+  NEW.closed_by:=auth.uid();
+  NEW.closed_at:=now();
+  NEW.status:='closed';
+  IF NEW.closing_type='full' THEN
+    IF abs(NEW.balance)>0.009 OR abs(COALESCE(NEW.difference,0))>0.009 THEN
+      RAISE EXCEPTION 'لا يمكن الإقفال الكامل مع رصيد أو فرق نقدي. الرصيد % والفرق %',NEW.balance,COALESCE(NEW.difference,0);
+    END IF;
+    IF v_allocations>0.009 THEN
+      RAISE EXCEPTION 'لا يمكن الإقفال الكامل قبل تسوية تخصيصات الموزعين. المتبقي %',v_allocations;
+    END IF;
+    IF v_stock>0.0005 THEN
+      RAISE EXCEPTION 'لا يمكن الإقفال الكامل قبل تصريف أو إرجاع مخزون الحملة. المتبقي %',v_stock;
+    END IF;
+  END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS prepare_account_closing_before ON public.account_closings;
+CREATE TRIGGER prepare_account_closing_before
+BEFORE INSERT ON public.account_closings
+FOR EACH ROW EXECUTE FUNCTION public.prepare_account_closing();
+
+CREATE OR REPLACE FUNCTION public.finish_account_closing()
+RETURNS trigger LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+BEGIN
+  IF NEW.closing_type='full' THEN UPDATE public.campaigns SET status='closed' WHERE id=NEW.campaign_id; END IF;
+  RETURN NEW;
+END; $$;
+
+DROP TRIGGER IF EXISTS finish_account_closing_after ON public.account_closings;
+CREATE TRIGGER finish_account_closing_after
+AFTER INSERT ON public.account_closings
+FOR EACH ROW EXECUTE FUNCTION public.finish_account_closing();
+
+DROP FUNCTION IF EXISTS public.reopen_account_closing(uuid,text);
+CREATE FUNCTION public.reopen_account_closing(p_id uuid,p_reason text DEFAULT NULL)
+RETURNS public.account_closings LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE closing public.account_closings%ROWTYPE;
+BEGIN
+  IF NOT public.has_role(ARRAY['admin','supervisor']::public.app_role[]) THEN
+    RAISE EXCEPTION 'غير مصرح بإعادة فتح الإقفال';
+  END IF;
+  IF NULLIF(trim(p_reason),'') IS NULL THEN RAISE EXCEPTION 'سبب إعادة الفتح مطلوب'; END IF;
+  SELECT * INTO closing FROM public.account_closings WHERE id=p_id FOR UPDATE;
+  IF NOT FOUND THEN RAISE EXCEPTION 'سجل الإقفال غير موجود'; END IF;
+  IF closing.status='reopened' THEN RETURN closing; END IF;
+  PERFORM 1 FROM public.campaigns WHERE id=closing.campaign_id FOR UPDATE;
+  UPDATE public.account_closings
+  SET status='reopened',notes=concat_ws(E'\n',notes,'سبب إعادة الفتح: '||trim(p_reason))
+  WHERE id=closing.id RETURNING * INTO closing;
+  UPDATE public.campaigns SET status='open' WHERE id=closing.campaign_id;
+  RETURN closing;
+END; $$;
+
+-- Rebuild date controls without the deleted distributor-advance table.
+DO $$ DECLARE item record;
+BEGIN
+  FOR item IN SELECT * FROM (VALUES
+    ('cash_receipts','receipt_date'),('cash_payments','payment_date'),
+    ('cash_transfers','transfer_date'),('campaign_funding','funding_date'),
+    ('in_kind_receipts','receipt_date'),('campaign_in_kind_funding','funding_date'),
+    ('in_kind_payments','payment_date')
+  ) AS list(table_name,date_column)
+  LOOP
+    EXECUTE format('DROP TRIGGER IF EXISTS enforce_backdate ON public.%I',item.table_name);
+    EXECUTE format(
+      'CREATE TRIGGER enforce_backdate BEFORE INSERT OR UPDATE OF %I ON public.%I FOR EACH ROW EXECUTE FUNCTION public.enforce_backdated_document(%L)',
+      item.date_column,item.table_name,item.date_column
+    );
+  END LOOP;
+END $$;
+
+-- SQL-editor-only helper used by first_admin.sql. It promotes an existing Auth
+-- user; it never creates or stores a password inside public SQL.
+DROP FUNCTION IF EXISTS public.bootstrap_first_admin(text,text,text);
+CREATE FUNCTION public.bootstrap_first_admin(
+  p_phone text,
+  p_full_name text DEFAULT NULL,
+  p_fingerprint text DEFAULT NULL
+)
+RETURNS uuid LANGUAGE plpgsql SECURITY DEFINER SET search_path=public,auth AS $$
+DECLARE
+  v_digits text;
+  v_email text;
+  v_user_id uuid;
+  v_existing_device_user uuid;
+BEGIN
+  v_digits:=regexp_replace(COALESCE(p_phone,''),'[^0-9]','','g');
+  IF left(v_digits,3)='967' THEN v_digits:=substr(v_digits,4); END IF;
+  v_digits:=regexp_replace(v_digits,'^0+','');
+  IF v_digits !~ '^7[0-9]{8}$' THEN
+    RAISE EXCEPTION 'رقم أول مدير يجب أن يكون يمنياً من 9 أرقام ويبدأ بـ 7';
+  END IF;
+  v_email:='u'||v_digits||'@zakat.local';
+  SELECT id INTO v_user_id FROM auth.users WHERE lower(email)=lower(v_email);
+  IF NOT FOUND THEN
+    RAISE EXCEPTION 'أنشئ مستخدم Auth أولاً بالبريد الداخلي % ثم أعد تشغيل الملف',v_email;
+  END IF;
+  INSERT INTO public.profiles(id,full_name,username,email,phone,role,status,is_active,expires_at)
+  VALUES(
+    v_user_id,COALESCE(NULLIF(trim(p_full_name),''),'مدير النظام الأول'),
+    'admin_'||right(v_digits,4),v_email,'+967'||v_digits,'admin','active',true,NULL
+  )
+  ON CONFLICT(id) DO UPDATE SET
+    full_name=COALESCE(NULLIF(trim(p_full_name),''),public.profiles.full_name),
+    email=v_email,phone='+967'||v_digits,role='admin',status='active',is_active=true,expires_at=NULL,updated_at=now();
+  UPDATE auth.users
+  SET raw_app_meta_data=COALESCE(raw_app_meta_data,'{}'::jsonb)||jsonb_build_object('role','admin')
+  WHERE id=v_user_id;
+  IF NULLIF(trim(p_fingerprint),'') IS NOT NULL THEN
+    SELECT user_id INTO v_existing_device_user
+    FROM public.authorized_devices WHERE fingerprint=trim(p_fingerprint) FOR UPDATE;
+    IF FOUND AND v_existing_device_user IS DISTINCT FROM v_user_id THEN
+      RAISE EXCEPTION 'بصمة الجهاز مرتبطة بمستخدم آخر';
+    END IF;
+    INSERT INTO public.authorized_devices(
+      user_id,device_name,fingerprint,platform,status,is_active,last_seen_at,notes
+    ) VALUES(
+      v_user_id,'جهاز أول مدير',trim(p_fingerprint),'Web','approved',true,now(),'اعتماد من ملف أول مدير'
+    )
+    ON CONFLICT(fingerprint) DO UPDATE SET
+      user_id=excluded.user_id,status='approved',is_active=true,last_seen_at=now(),notes=excluded.notes;
+  END IF;
+  RETURN v_user_id;
+END; $$;
+
+-- Login attempts are written through a narrow RPC. Anonymous callers may log
+-- only a failed authentication; device-related outcomes are verified against
+-- the authenticated user's actual device row.
+DROP FUNCTION IF EXISTS public.record_login_attempt(text,text,text,text);
+CREATE FUNCTION public.record_login_attempt(
+  p_phone text,
+  p_fingerprint text,
+  p_device_name text,
+  p_result text
+)
+RETURNS bigint LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE
+  v_id bigint;
+  v_headers jsonb:=COALESCE(NULLIF(current_setting('request.headers',true),''),'{}')::jsonb;
+  v_ip_text text;
+  v_ip inet;
+  v_device_status text;
+BEGIN
+  IF p_result NOT IN ('failed','pending_device','blocked','success') THEN
+    RAISE EXCEPTION 'نتيجة محاولة الدخول غير صالحة';
+  END IF;
+  IF p_result<>'failed' THEN
+    IF auth.uid() IS NULL THEN RAISE EXCEPTION 'يجب المصادقة قبل تسجيل حالة الجهاز'; END IF;
+    SELECT status INTO v_device_status
+    FROM public.authorized_devices
+    WHERE user_id=auth.uid() AND fingerprint=left(COALESCE(p_fingerprint,''),200);
+    IF NOT FOUND THEN RAISE EXCEPTION 'طلب الجهاز غير موجود'; END IF;
+    IF (p_result='pending_device' AND v_device_status<>'pending')
+      OR (p_result='blocked' AND v_device_status<>'blocked')
+      OR (p_result='success' AND v_device_status<>'approved') THEN
+      RAISE EXCEPTION 'نتيجة محاولة الدخول لا تطابق حالة الجهاز';
+    END IF;
+  END IF;
+  v_ip_text:=split_part(COALESCE(v_headers->>'x-forwarded-for',v_headers->>'x-real-ip',''),',',1);
+  BEGIN v_ip:=NULLIF(trim(v_ip_text),'')::inet; EXCEPTION WHEN others THEN v_ip:=NULL; END;
+  INSERT INTO public.login_attempts(phone,device_fingerprint,device_name,ip_address,result)
+  VALUES(
+    left(regexp_replace(COALESCE(p_phone,''),'[^0-9+]','','g'),32),
+    left(COALESCE(p_fingerprint,''),200),left(COALESCE(p_device_name,'جهاز غير معروف'),200),v_ip,p_result
+  ) RETURNING id INTO v_id;
+  RETURN v_id;
+END; $$;
+
+CREATE OR REPLACE FUNCTION public.enforce_approved_device()
+RETURNS void LANGUAGE plpgsql SECURITY DEFINER SET search_path=public AS $$
+DECLARE v_path text:=trim(both '/' FROM COALESCE(current_setting('request.path',true),''));
+BEGIN
+  IF auth.uid() IS NULL THEN RETURN; END IF;
+  IF v_path IN ('rpc/request_device_authorization','rpc/record_login_attempt') THEN RETURN; END IF;
+  IF NOT public.has_authorized_device() THEN
+    RAISE EXCEPTION 'هذا الجهاز غير معتمد لاستخدام النظام';
+  END IF;
+END; $$;
+
+DROP POLICY IF EXISTS login_attempts_anon_insert ON public.login_attempts;
+REVOKE INSERT ON TABLE public.login_attempts FROM anon,authenticated;
+REVOKE USAGE,SELECT ON SEQUENCE public.login_attempts_id_seq FROM anon,authenticated;
+
+-- Monitoring data is not readable merely because a user is authenticated.
+-- Session owners may see their own session; monitoring roles see the whole log.
+DO $$
+DECLARE v_table text; v_policy record;
+BEGIN
+  FOREACH v_table IN ARRAY ARRAY['login_attempts','user_sessions','user_archives'] LOOP
+    FOR v_policy IN
+      SELECT policyname FROM pg_policies WHERE schemaname='public' AND tablename=v_table
+    LOOP
+      EXECUTE format('DROP POLICY IF EXISTS %I ON public.%I',v_policy.policyname,v_table);
+    END LOOP;
+  END LOOP;
+END $$;
+CREATE POLICY login_attempts_monitor_read ON public.login_attempts FOR SELECT TO authenticated
+USING(public.has_role(ARRAY['admin','supervisor','auditor']::public.app_role[]));
+CREATE POLICY user_sessions_owner_or_monitor_read ON public.user_sessions FOR SELECT TO authenticated
+USING(user_id=auth.uid() OR public.has_role(ARRAY['admin','supervisor','auditor']::public.app_role[]));
+CREATE POLICY user_archives_owner_or_monitor_read ON public.user_archives FOR SELECT TO authenticated
+USING(user_id=auth.uid() OR public.has_role(ARRAY['admin','supervisor','auditor']::public.app_role[]));
+
+-- Final RLS policy for allocation management.
+DROP POLICY IF EXISTS authenticated_manage_campaign_distributors ON public.campaign_distributors;
+CREATE POLICY authenticated_manage_campaign_distributors
+ON public.campaign_distributors FOR ALL TO authenticated
+USING(public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]))
+WITH CHECK(public.has_role(ARRAY['admin','supervisor','accountant']::public.app_role[]));
+
+-- Functions are not protected by RLS, so every new SECURITY DEFINER function is
+-- closed to PUBLIC and prior role grants are cleared before the exact
+-- application entry points are granted.
+REVOKE EXECUTE ON ALL FUNCTIONS IN SCHEMA public FROM PUBLIC,anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.enforce_approved_device() TO anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.record_login_attempt(text,text,text,text) TO anon,authenticated;
+GRANT EXECUTE ON FUNCTION public.current_user_role(),public.has_role(public.app_role[]),
+  public.current_delegate_id(),public.is_active_admin() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.request_device_authorization(text,text,text),
+  public.open_user_session(text,text),public.close_user_session(uuid),public.touch_user_session(uuid) TO authenticated;
+GRANT EXECUTE ON FUNCTION public.get_cash_payment_context(uuid,uuid,uuid),
+  public.quick_deliver_cash(uuid,numeric,uuid,uuid,uuid),
+  public.post_cash_receipt(uuid),public.cancel_cash_receipt(uuid,text),
+  public.post_campaign_funding(uuid),public.cancel_campaign_funding(uuid,text),
+  public.post_cash_transfer(uuid),public.cancel_cash_transfer(uuid,text),
+  public.post_cash_payment(uuid),public.cancel_cash_payment(uuid,text),
+  public.settle_campaign_distributor(uuid,text),public.confirm_cash_payment_receipt(uuid),
+  public.post_in_kind_receipt(uuid),public.cancel_in_kind_receipt(uuid,text),
+  public.post_campaign_in_kind_funding(uuid),public.cancel_campaign_in_kind_funding(uuid,text),
+  public.post_in_kind_payment(uuid),public.cancel_in_kind_payment(uuid,text),
+  public.confirm_in_kind_payment_receipt(uuid),public.reopen_account_closing(uuid,text),
+  public.save_in_kind_receipt_draft(jsonb,jsonb,uuid),
+  public.save_campaign_in_kind_funding_draft(jsonb,jsonb,uuid),
+  public.save_in_kind_payment_draft(jsonb,jsonb,uuid),
+  public.save_basket_with_items(jsonb,jsonb,uuid),
+  public.save_system_settings(jsonb) TO authenticated;
+REVOKE ALL ON FUNCTION public.bootstrap_first_admin(text,text,text) FROM PUBLIC,anon,authenticated;
+
+GRANT SELECT ON public.campaign_balances,public.v_campaign_cash_balances,public.v_campaigns,
+  public.v_delegate_cash_balances,public.v_delegates,public.v_campaign_distributors TO authenticated;
+
+-- Supabase projects created with automatic Data API exposure disabled do not
+-- grant new objects to service_role. Edge Functions use that role, so grant it
+-- explicitly after every application object has been created.
+GRANT USAGE ON SCHEMA public TO service_role;
+GRANT SELECT,INSERT,UPDATE,DELETE ON ALL TABLES IN SCHEMA public TO service_role;
+GRANT USAGE,SELECT ON ALL SEQUENCES IN SCHEMA public TO service_role;
+GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO service_role;
+
+-- Keep future privileged functions closed by default while preserving the
+-- server-side role used by trusted Edge Functions.
+ALTER DEFAULT PRIVILEGES IN SCHEMA public REVOKE EXECUTE ON FUNCTIONS FROM PUBLIC,anon,authenticated;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT EXECUTE ON FUNCTIONS TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT,INSERT,UPDATE,DELETE ON TABLES TO service_role;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE,SELECT ON SEQUENCES TO service_role;
+
+UPDATE public.system_installation SET version='11.2.0',installed_at=now() WHERE id=1;
+NOTIFY pgrst,'reload schema';
+NOTIFY pgrst,'reload config';
+
+COMMIT;
