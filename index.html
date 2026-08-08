@@ -14,7 +14,8 @@
   <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css" />
   <script>window.addEventListener("DOMContentLoaded",()=>{const t=document.createElement("i");t.className="fa-solid fa-laptop";t.style.cssText="position:absolute;visibility:hidden";document.body.appendChild(t);const ok=getComputedStyle(t,"::before").content!=="none";document.documentElement.classList.toggle("fontawesome-missing",!ok);t.remove();});</script>
   <link rel="stylesheet" href="css/styles.css" />
-  <script src="https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js"></script>
+  <script src="assets/vendor/jszip.min.js"></script>
+  <script src="assets/vendor/xlsx.full.min.js"></script>
 </head>
 <body>
   <noscript>يجب تفعيل JavaScript لتشغيل النظام.</noscript>
@@ -87,6 +88,7 @@
       <nav id="main-nav" class="main-nav" aria-label="القائمة الرئيسية"></nav>
 
       <div class="sidebar-footer">
+        <div class="sidebar-version" id="sidebar-version">الإصدار 11.2.0</div>
         <div class="connection-chip" id="connection-chip"><span class="status-dot"></span><span>متصل</span></div>
         <button class="profile-mini" id="profile-menu-button">
           <span class="avatar" id="sidebar-avatar">م</span>

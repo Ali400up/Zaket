@@ -1,9 +1,9 @@
-const CACHE_NAME = "zakat-v11-rc1-cache";
+const CACHE_NAME = "zakat-v11-2-verified-cache";
 const STATIC_ASSETS = [
   "/", "/index.html", "/css/styles.css", "/js/config.js", "/js/app.js",
-  "/js/data-service.js", "/js/connectivity.js", "/js/demo-data.js",
-  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js",
-  "/js/ui.js", "/assets/logo.svg", "/manifest.webmanifest"
+  "/js/data-service.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
+  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js", "/js/device-identity.js",
+  "/js/ui.js", "/js/user-guide.js", "/assets/logo.svg", "/assets/vendor/xlsx.full.min.js", "/assets/vendor/jszip.min.js", "/manifest.webmanifest"
 ];
 
 self.addEventListener("install", event => {
