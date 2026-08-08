@@ -1,4 +1,4 @@
-const CACHE_NAME = "zakat-v11-2-verified-cache";
+const CACHE_NAME = "zakat-v11-2-2-verified-cache";
 const STATIC_ASSETS = [
   "/", "/index.html", "/css/styles.css", "/js/config.js", "/js/app.js",
   "/js/data-service.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
