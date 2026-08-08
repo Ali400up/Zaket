@@ -12,7 +12,7 @@ window.ZAKAT_CONFIG = {
     resetUserPassword: "reset-user-password"
   },
   appName: "نظام إدارة الزكاة والتبرعات",
-  version: "11.2.0",
+  version: "11.2.2",
   releaseName: "النسخة الموحدة المراجعة",
   currency: "YER",
   locale: "ar-YE",

@@ -7,22 +7,56 @@ import { getDeviceFingerprint, getDeviceName } from "./device-identity.js";
 const DB_KEY = "zakat_demo_database_v11_2";
 const SESSION_KEY = "zakat_demo_session_v11_2";
 const config = window.ZAKAT_CONFIG || {};
-const LIVE_CACHE_KEY = "zakat_live_cache_v11_2";
+const LIVE_CACHE_KEY = "zakat_live_cache_v11_2_1";
+const LEGACY_LIVE_CACHE_KEYS = ["zakat_live_cache_v11_2"];
 const OFFLINE_SESSION_KEY = "zakat_offline_session_v11_2";
 const USER_SESSION_KEY = "zakat_active_user_session_v11_2";
 const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","items","warehouses","stock_balances","system_settings"]);
+const DISTRIBUTOR_SCOPED_TABLES = new Set(["beneficiaries", "cash_payments", "in_kind_payments", "distribution_assignments"]);
 
 function readLiveCache() {
   try { return JSON.parse(localStorage.getItem(LIVE_CACHE_KEY) || "{}"); } catch { return {}; }
 }
+function readStoredSession() {
+  try {
+    const key = isSupabaseConfigured ? OFFLINE_SESSION_KEY : SESSION_KEY;
+    const session = JSON.parse(localStorage.getItem(key) || "null");
+    if (!session?.profile?.id) return null;
+    if (isSupabaseConfigured && session.deviceFingerprint !== getDeviceFingerprint()) return null;
+    return session;
+  } catch { return null; }
+}
+function sessionProfileId(session) {
+  return String(session?.profile?.id || session?.user?.id || "");
+}
+export function isCacheEntryOwnedBySession(entry, session, deviceFingerprint) {
+  const ownerProfileId = sessionProfileId(session);
+  return Boolean(
+    entry &&
+    ownerProfileId &&
+    String(entry.ownerProfileId || "") === ownerProfileId &&
+    entry.deviceFingerprint === deviceFingerprint
+  );
+}
 function cacheRows(table, rows) {
   if (!CACHE_TABLES.has(table)) return;
+  const session = readStoredSession();
+  const ownerProfileId = sessionProfileId(session);
+  if (!ownerProfileId) return;
   const cache = readLiveCache();
-  cache[table] = { rows: clone(rows || []), savedAt: new Date().toISOString() };
+  cache[table] = {
+    rows: clone(rows || []),
+    savedAt: new Date().toISOString(),
+    ownerProfileId,
+    ownerRole: session.profile?.role || null,
+    deviceFingerprint: getDeviceFingerprint()
+  };
   localStorage.setItem(LIVE_CACHE_KEY, JSON.stringify(cache));
 }
-function cachedRows(table) {
-  return readLiveCache()[table]?.rows || [];
+function cachedRows(table, session = readStoredSession()) {
+  const entry = readLiveCache()[table];
+  if (!isCacheEntryOwnedBySession(entry, session, getDeviceFingerprint())) return [];
+  return Array.isArray(entry.rows) ? entry.rows : [];
 }
 const viewMap = {
   profiles: "v_profiles",
@@ -86,6 +120,25 @@ const atomicDraftRpcMap = {
 
 function clone(value) {
   return typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+}
+
+export function nextBeneficiaryToggleStatus(currentStatus) {
+  if (currentStatus === "approved") return "suspended";
+  if (currentStatus === "suspended") return "approved";
+  throw new Error("لا يمكن تفعيل أو إيقاف المستفيد قبل اعتماده. استخدم زر «اعتماد» أولاً.");
+}
+
+export function scopeRowsForSession(table, rows, session, delegates = []) {
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (session?.profile?.role !== "distributor" || !DISTRIBUTOR_SCOPED_TABLES.has(table)) return safeRows;
+  const profileId = sessionProfileId(session);
+  const profileDelegateId = session?.profile?.delegate_id || null;
+  const linkedDelegate = (delegates || []).find(delegate => delegate?.is_active !== false && (
+    (profileId && String(delegate.profile_id || "") === profileId) ||
+    (profileDelegateId && String(delegate.id) === String(profileDelegateId))
+  ));
+  if (!linkedDelegate) return [];
+  return safeRows.filter(row => String(row.delegate_id || "") === String(linkedDelegate.id));
 }
 
 function ensureDemoDb() {
@@ -637,6 +690,7 @@ export const dataService = {
   get demoMode() { return !isSupabaseConfigured; },
 
   async initialize() {
+    LEGACY_LIVE_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
     if (!isSupabaseConfigured) ensureDemoDb();
     if ("serviceWorker" in navigator) {
       try { await navigator.serviceWorker.register("/service-worker.js"); } catch { /* optional */ }
@@ -694,16 +748,21 @@ export const dataService = {
 
   async signOut() {
     const sessionId = localStorage.getItem(USER_SESSION_KEY);
-    if (!isSupabaseConfigured) {
-      const db = ensureDemoDb();
-      const tracked = findById(db, "user_sessions", sessionId);
-      if (tracked) { tracked.status = "inactive"; tracked.last_activity_at = new Date().toISOString(); writeDemoDb(db); }
+    try {
+      if (!isSupabaseConfigured) {
+        const db = ensureDemoDb();
+        const tracked = findById(db, "user_sessions", sessionId);
+        if (tracked) { tracked.status = "inactive"; tracked.last_activity_at = new Date().toISOString(); writeDemoDb(db); }
+      } else {
+        if (sessionId) { try { await supabase.rpc("close_user_session", { p_session_id: sessionId }); } catch {} }
+        await supabase.auth.signOut();
+      }
+    } finally {
       localStorage.removeItem(SESSION_KEY);
-    } else {
-      if (sessionId) { try { await supabase.rpc("close_user_session", { p_session_id: sessionId }); } catch {} }
-      await supabase.auth.signOut();
+      localStorage.removeItem(USER_SESSION_KEY);
+      localStorage.removeItem(OFFLINE_SESSION_KEY);
+      localStorage.removeItem(LIVE_CACHE_KEY);
     }
-    localStorage.removeItem(USER_SESSION_KEY);
   },
 
   async getSession() {
@@ -720,7 +779,11 @@ export const dataService = {
     }
     try {
       const session = await getCurrentSession();
-      if (!session) return null;
+      if (!session) {
+        localStorage.removeItem(OFFLINE_SESSION_KEY);
+        localStorage.removeItem(LIVE_CACHE_KEY);
+        return null;
+      }
       const profile = await getCurrentProfile(session.user.id);
       const result = { ...session, profile };
       localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: session.user.id }, profile, deviceFingerprint: getDeviceFingerprint(), cachedAt: new Date().toISOString() }));
@@ -756,14 +819,7 @@ export const dataService = {
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       const sourceRows = table === "stock_balances" ? buildDemoStockBalances(db) : (db[table] || []);
-      let rows = sourceRows.map(row => enrichDemoRow(db, table, row));
-      const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
-      if (session?.profile?.role === "distributor") {
-        const linkedDelegate = (db.delegates || []).find(d => d.profile_id === session.profile.id && d.is_active !== false);
-        if (["beneficiaries", "cash_payments", "in_kind_payments", "distribution_assignments"].includes(table)) {
-          rows = linkedDelegate ? rows.filter(row => row.delegate_id === linkedDelegate.id) : [];
-        }
-      }
+      let rows = scopeRowsForSession(table, sourceRows.map(row => enrichDemoRow(db, table, row)), readStoredSession(), db.delegates || []);
       Object.entries(filters || {}).forEach(([key, value]) => {
         if (value !== "" && value !== undefined && value !== null) rows = rows.filter(row => String(row[key]) === String(value));
       });
@@ -802,7 +858,8 @@ export const dataService = {
       cacheRows(table, data || []);
       return { data: data || [], total: count || 0, source: "network" };
     } catch (error) {
-      const rows = cachedRows(table);
+      const session = readStoredSession();
+      const rows = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session));
       if (rows.length || !isOnline()) {
         let filtered = rows;
         Object.entries(filters || {}).forEach(([key, value]) => { if (value !== "" && value != null) filtered = filtered.filter(row => String(row[key]) === String(value)); });
@@ -999,7 +1056,10 @@ export const dataService = {
         record.returned_amount = Number(record.returned_amount || 0) + remaining;
         record.status = "settled";
       }
-      else if (action === "toggle") record.is_active = !record.is_active;
+      else if (action === "toggle") {
+        if (table === "beneficiaries") record.status = nextBeneficiaryToggleStatus(record.status);
+        else record.is_active = !record.is_active;
+      }
       else if (action === "open-close") record.status = record.status === "open" ? "closed" : "open";
       else if (action === "reopen") {
         record.status = "reopened";
@@ -1050,10 +1110,13 @@ export const dataService = {
     }
     const patch = action === "approve" ? { status: "approved" }
       : action === "confirm-receipt" ? { receipt_status: "received" }
+      : action === "toggle" && table === "beneficiaries" ? { status: nextBeneficiaryToggleStatus(extra.current) }
       : action === "toggle" ? { is_active: extra.current === false }
       : action === "open-close" ? { status: extra.current === "open" ? "closed" : "open" }
       : {};
-    const { data, error } = await supabase.from(table).update(patch).eq("id", id).select().single();
+    let updateQuery = supabase.from(table).update(patch).eq("id", id);
+    if (action === "toggle" && table === "beneficiaries") updateQuery = updateQuery.eq("status", extra.current);
+    const { data, error } = await updateQuery.select().single();
     if (error) throw error;
     return data;
   },
