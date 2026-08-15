@@ -1,8 +1,8 @@
-const CACHE_NAME = "zakat-v11-2-2-verified-cache";
+const CACHE_NAME = "zakat-v12-0-0-verified-cache";
 const STATIC_ASSETS = [
   "/", "/index.html", "/css/styles.css", "/js/config.js", "/js/app.js",
   "/js/data-service.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
-  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js", "/js/device-identity.js",
+  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js", "/js/device-identity.js", "/js/ai-assistant.js", "/js/state-machines.js",
   "/js/ui.js", "/js/user-guide.js", "/assets/logo.svg", "/assets/vendor/xlsx.full.min.js", "/assets/vendor/jszip.min.js", "/manifest.webmanifest"
 ];
 
