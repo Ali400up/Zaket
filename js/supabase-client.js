@@ -15,7 +15,7 @@ if (isSupabaseConfigured) {
       },
       global: {
         headers: {
-          "x-client-info": "zakat-management-static/11.2.2",
+          "x-client-info": "zakat-management-static/12.0.0",
           "x-device-fingerprint": getDeviceFingerprint()
         }
       }

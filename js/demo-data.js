@@ -11,10 +11,10 @@ export const demoData = {
     { id: "u-old", full_name: "سمير أحمد", username: "sameer", email: "sameer@example.com", phone: "777000666", role: "data_entry", is_active: false, expires_at: dateOnly(-10), notes: "حساب موقوف", created_at: iso(-90) }
   ],
   delegates: [
-    { id: "d-1", profile_id: "u-distributor", full_name: "عبدالله الصبري", phone: "777000444", national_id: "0102030405", delegate_type: "both", is_active: true, notes: "منطقة صنعاء", created_at: iso(-120) },
-    { id: "d-2", profile_id: null, full_name: "أحمد الشامي", phone: "777111222", national_id: "0203040506", delegate_type: "cash", is_active: true, notes: "منطقة الأمانة", created_at: iso(-90) },
-    { id: "d-3", profile_id: null, full_name: "فاطمة الحضرمي", phone: "777222333", national_id: null, delegate_type: "in_kind", is_active: true, notes: "التوزيع النسائي", created_at: iso(-70) },
-    { id: "d-4", profile_id: null, full_name: "ياسر الوصابي", phone: "777333444", national_id: "0304050607", delegate_type: "cash", is_active: false, notes: "موقوف مؤقتاً", created_at: iso(-60) }
+    { id: "d-1", profile_id: "u-distributor", full_name: "عبدالله الصبري", phone: "777000444", national_id: "0102030405", delegate_type: "both", can_create_beneficiaries: true, is_active: true, notes: "منطقة صنعاء", created_at: iso(-120) },
+    { id: "d-2", profile_id: null, full_name: "أحمد الشامي", phone: "777111222", national_id: "0203040506", delegate_type: "cash", can_create_beneficiaries: false, is_active: true, notes: "منطقة الأمانة", created_at: iso(-90) },
+    { id: "d-3", profile_id: null, full_name: "فاطمة الحضرمي", phone: "777222333", national_id: null, delegate_type: "in_kind", can_create_beneficiaries: false, is_active: true, notes: "التوزيع النسائي", created_at: iso(-70) },
+    { id: "d-4", profile_id: null, full_name: "ياسر الوصابي", phone: "777333444", national_id: "0304050607", delegate_type: "cash", can_create_beneficiaries: false, is_active: false, notes: "موقوف مؤقتاً", created_at: iso(-60) }
   ],
   donors: [
     { id: "don-1", name: "أحمد عبدالله", donor_type: "individual", phone: "733100100", identity_no: "1002003004", email: "ahmed@example.com", is_anonymous: false, is_active: true, notes: "متبرع دائم", created_at: iso(-140) },

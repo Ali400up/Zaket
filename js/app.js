@@ -4,6 +4,7 @@ import { getOfflineQueue, removeQueueItem, clearCompletedQueue } from "./offline
 import { isOnline, checkConnectivity, subscribeConnection } from "./connectivity.js";
 import { importDefinitions, downloadImportTemplate, parseImportFile } from "./import-service.js";
 import { roleDailyGuides, userGuideSections } from "./user-guide.js";
+import { renderAssistantScreen, handleAssistantInteraction } from "./ai-assistant.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -13,6 +14,7 @@ const config = window.ZAKAT_CONFIG || {};
 
 const routeMap = {
   dashboard: null,
+  "ai-assistant": null,
   "global-search": null,
   guide: null,
   branches: "branches",
@@ -86,12 +88,12 @@ const configKeyMap = {
 
 const roleAccess = {
   admin: "*",
-  supervisor: ["branches", "devices", "login-attempts", "user-tracking", "user-archives", "cashboxes", "cashbox-users", "cash-transfers", "quick-delivery", "wallet-providers", "bulk-disbursements", "disbursement-results", "units", "warehouses", "stock-balances", "messages", "message-templates", "imports", "dashboard", "delegates", "donors", "classifications", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "closings", "reports", "audit", "sync"],
-  accountant: ["cashboxes", "cashbox-users", "cash-transfers", "wallet-providers", "bulk-disbursements", "disbursement-results", "dashboard", "delegates", "donors", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "closings", "reports"],
-  distributor: ["quick-delivery", "messages", "dashboard", "beneficiaries", "cash-payments", "in-kind-payments", "sync"],
-  data_entry: ["imports", "messages", "dashboard", "donors", "beneficiaries", "sync"],
-  warehouse: ["units", "warehouses", "stock-balances", "dashboard", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "sync"],
-  auditor: ["cashboxes", "stock-balances", "login-attempts", "user-tracking", "dashboard", "reports", "audit"]
+  supervisor: ["ai-assistant", "branches", "devices", "login-attempts", "user-tracking", "user-archives", "cashboxes", "cashbox-users", "cash-transfers", "quick-delivery", "wallet-providers", "bulk-disbursements", "disbursement-results", "units", "warehouses", "stock-balances", "messages", "message-templates", "imports", "dashboard", "delegates", "donors", "classifications", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "closings", "reports", "audit", "sync"],
+  accountant: ["ai-assistant", "cashboxes", "cashbox-users", "cash-transfers", "wallet-providers", "bulk-disbursements", "disbursement-results", "dashboard", "delegates", "donors", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "closings", "reports"],
+  distributor: ["ai-assistant", "quick-delivery", "messages", "dashboard", "beneficiaries", "cash-payments", "in-kind-payments", "sync"],
+  data_entry: ["ai-assistant", "imports", "messages", "dashboard", "donors", "beneficiaries", "sync"],
+  warehouse: ["ai-assistant", "units", "warehouses", "stock-balances", "dashboard", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "sync"],
+  auditor: ["ai-assistant", "cashboxes", "stock-balances", "login-attempts", "user-tracking", "dashboard", "reports", "audit"]
 };
 
 const state = {
@@ -159,7 +161,7 @@ function showApp() {
   document.getElementById("sidebar-avatar").textContent = initials(displayName);
   document.getElementById("top-avatar").textContent = initials(displayName);
   const version = document.getElementById("sidebar-version");
-  if (version) version.textContent = `الإصدار ${config.version || "11.2.2"}`;
+  if (version) version.textContent = `الإصدار ${config.version || "12.0.0"}`;
   buildNavigation();
   updateConnectionStatus();
   updateQueueBadge();
@@ -203,6 +205,7 @@ async function navigate(screenId, updateHash = true) {
 
   try {
     if (screenId === "dashboard") await renderDashboard();
+    else if (screenId === "ai-assistant") await renderAssistantScreen(els.pageContent, dataService, state.session);
     else if (screenId === "global-search") await renderReports();
     else if (screenId === "guide") await renderGuide();
     else if (screenId === "classifications") await renderClassifications();
@@ -317,11 +320,15 @@ async function renderClassifications() {
 }
 
 function renderToolbar(cfg, prependToolbar = "") {
+  const profile = state.session?.profile || {};
+  const distributorBeneficiaries = cfg.table === "beneficiaries" && profile.role === "distributor";
+  const canAdd = !distributorBeneficiaries || profile.can_create_beneficiaries === true;
+  const canImport = cfg.importable && !distributorBeneficiaries;
   return `<section class="page-toolbar"><div><div class="page-description">${escapeHtml(cfg.description || "")}</div>${prependToolbar ? `<div style="margin-top:12px">${prependToolbar}</div>` : ""}</div><div class="toolbar-actions">
-    ${cfg.importable ? `<button class="ghost-button" data-download-import-template="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-arrow-down"></i> نموذج Excel</button><button class="ghost-button" data-open-import="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-import"></i> استيراد</button>` : ""}
+    ${canImport ? `<button class="ghost-button" data-download-import-template="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-arrow-down"></i> نموذج Excel</button><button class="ghost-button" data-open-import="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-import"></i> استيراد</button>` : ""}
     <button class="ghost-button" data-export-current><i class="fa-solid fa-file-export"></i> تصدير</button>
     <button class="ghost-button" data-print-current><i class="fa-solid fa-print"></i> طباعة</button>
-    ${cfg.primaryLabel ? `<button class="primary-button" data-add-record><i class="fa-solid fa-plus"></i> ${escapeHtml(cfg.primaryLabel)}</button>` : ""}
+    ${cfg.primaryLabel && canAdd ? `<button class="primary-button" data-add-record><i class="fa-solid fa-plus"></i> ${escapeHtml(cfg.primaryLabel)}</button>` : ""}
   </div></section>`;
 }
 
@@ -394,18 +401,24 @@ const actionMeta = {
   "open-close": ["fa-solid fa-door-open", "فتح/إغلاق"], post: ["fa-solid fa-stamp", "ترحيل"], print: ["fa-solid fa-print", "طباعة"],
   cancel: ["fa-solid fa-ban", "إلغاء"], "confirm-receipt": ["fa-solid fa-signature", "تأكيد الاستلام"], movements: ["fa-solid fa-arrow-right-arrow-left", "حركة الصنف"],
   copy: ["fa-regular fa-copy", "نسخ"], settle: ["fa-solid fa-scale-balanced", "تسوية"], export: ["fa-solid fa-file-export", "تصدير"], "stock-check": ["fa-solid fa-warehouse", "فحص المخزون"], reopen: ["fa-solid fa-lock-open", "إعادة فتح"],
-  activity: ["fa-solid fa-list-check", "سجل نشاط المستخدم"], "download-template": ["fa-solid fa-file-arrow-down", "تنزيل النموذج"]
+  activity: ["fa-solid fa-list-check", "سجل نشاط المستخدم"], "download-template": ["fa-solid fa-file-arrow-down", "تنزيل النموذج"], retry: ["fa-solid fa-rotate-right", "إعادة المحاولة"]
 };
 
 function availableActions(cfg, row) {
+  const role = state.session?.profile?.role;
   return (cfg.actions || []).filter(action => {
+    if (role === "distributor" && cfg.table === "beneficiaries" && ["edit", "approve", "toggle"].includes(action)) return false;
     if (action === "edit" && ["posted", "cancelled", "closed"].includes(row.status)) return false;
+    if (action === "edit" && cfg.table === "campaign_distributors" && row.status === "settled") return false;
     if (action === "post" && !["approved", "under_review", "draft"].includes(row.status)) return false;
     if (action === "cancel" && row.status === "cancelled") return false;
     if (action === "approve" && row.status !== "under_review") return false;
     if (action === "toggle" && cfg.table === "beneficiaries" && !["approved", "suspended"].includes(row.status)) return false;
     if (action === "confirm-receipt" && (row.receipt_status === "received" || row.status !== "posted")) return false;
-    if (action === "settle" && row.status === "settled") return false;
+    if (action === "settle" && row.status !== "active") return false;
+    if (action === "reopen" && cfg.table === "campaign_distributors" && (row.status !== "settled" || !row.settled_at)) return false;
+    if (action === "toggle" && cfg.table === "campaign_distributors" && !["active", "suspended"].includes(row.status)) return false;
+    if (action === "retry" && (cfg.table === "disbursement_results" ? row.result !== "failed" : row.status !== "failed")) return false;
     return true;
   });
 }
@@ -413,8 +426,17 @@ function availableActions(cfg, row) {
 function renderRowActions(cfg, row) {
   const actions = availableActions(cfg, row);
   return `<div class="row-actions">${actions.map(action => {
-    const meta = actionMeta[action] || ["fa-solid fa-ellipsis", action];
-    return `<button class="row-action ${action === "cancel" ? "danger" : ""}" data-row-action="${action}" data-id="${row.id}" title="${meta[1]}"><i class="${meta[0]}"></i></button>`;
+    let meta = actionMeta[action] || ["fa-solid fa-ellipsis", action];
+    let stateClass = "";
+    if (action === "toggle") {
+      const active = cfg.table === "beneficiaries" ? row.status === "approved"
+        : cfg.table === "campaign_distributors" ? row.status === "active"
+        : cfg.table === "authorized_devices" ? row.status === "approved"
+        : row.is_active === true;
+      meta = [active ? "fa-solid fa-toggle-on" : "fa-solid fa-toggle-off", active ? "إيقاف" : "تفعيل"];
+      stateClass = active ? "toggle-on" : "toggle-off";
+    }
+    return `<button class="row-action ${action === "cancel" ? "danger" : ""} ${stateClass}" data-row-action="${action}" data-id="${row.id}" title="${meta[1]}" aria-label="${meta[1]}"><i class="${meta[0]}"></i></button>`;
   }).join("")}</div>`;
 }
 
@@ -430,12 +452,19 @@ async function loadRelationOptions(field) {
 
 async function openRecordForm(cfg, record = null, copyMode = false) {
   const role = state.session?.profile?.role || "data_entry";
-  const activeFields = cfg.fields.filter(field => !field.adminOnly || role === "admin");
+  const profile = state.session?.profile || {};
+  if (!record && cfg.table === "beneficiaries" && role === "distributor" && profile.can_create_beneficiaries !== true) {
+    throw new Error("لم يمنحك مدير النظام صلاحية إضافة مستفيدين جدد.");
+  }
+  const activeFields = cfg.fields.filter(field => (!field.adminOnly || role === "admin") && !(cfg.table === "beneficiaries" && role === "distributor" && field.key === "status"));
   const relationFields = activeFields.filter(f => ["relation", "autocompleteRelation"].includes(f.type));
   const relationResults = await Promise.all(relationFields.map(loadRelationOptions));
   const relationMap = new Map(relationFields.map((f, i) => [f.key, relationResults[i]]));
   const itemResult = activeFields.some(f => f.type === "lineItems") ? await dataService.list("items", { pageSize: 1000, filters: { is_active: true } }) : { data: [] };
   let values = record ? { ...record } : {};
+  if (role === "distributor" && activeFields.some(field => field.key === "delegate_id")) {
+    values.delegate_id = profile.delegate_id || values.delegate_id;
+  }
   if (copyMode) {
     values = { ...values, id: undefined, name: `${values.name || "نسخة"} - نسخة`, status: values.status === "posted" ? "draft" : values.status };
   }
@@ -452,19 +481,23 @@ async function openRecordForm(cfg, record = null, copyMode = false) {
   document.querySelectorAll("[data-add-line-item]").forEach(btn => btn.addEventListener("click", () => addLineItemRow(btn.dataset.mode, itemResult.data)));
   document.querySelectorAll("[data-remove-line-item]").forEach(btn => btn.addEventListener("click", () => btn.closest(".line-item-row").remove()));
   bindSmartFormFields(cfg);
-  document.getElementById("save-record").addEventListener("click", async () => {
+  const saveButton = document.getElementById("save-record");
+  saveButton.addEventListener("click", async () => {
     try {
       let payload = await collectFormData(activeFields);
       payload = await preparePayloadForSave(cfg, payload, relationMap);
       const missing = activeFields.filter(f => (f.required || (!record && f.requiredOnCreate)) && isEmptyValue(payload[f.key]));
       if (missing.length) throw new Error(`الحقول المطلوبة: ${missing.map(f => f.label).join("، ")}`);
-      const button = document.getElementById("save-record");
-      button.disabled = true; button.innerHTML = `<span class="spinner" style="width:20px;height:20px;border-width:2px"></span> جارٍ الحفظ`;
+      saveButton.disabled = true; saveButton.innerHTML = `<span class="spinner" style="width:20px;height:20px;border-width:2px"></span> جارٍ الحفظ`;
       const saved = record && !copyMode ? await dataService.update(cfg.table, record.id, payload) : await dataService.create(cfg.table, payload);
       closeModal();
       toast(saved?._queued ? "تم حفظ العملية محلياً وستُزامن عند عودة الاتصال." : "تم حفظ البيانات بنجاح.", saved?._queued ? "warning" : "success");
       await refreshCurrentScreen();
-    } catch (error) { toast(error.message || "تعذر الحفظ.", "error"); }
+    } catch (error) {
+      saveButton.disabled = false;
+      saveButton.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> حفظ البيانات`;
+      toast(error.message || "تعذر الحفظ.", "error");
+    }
   });
 }
 
@@ -483,7 +516,8 @@ function renderFormField(field, value, relationOptions = [], itemOptions = []) {
   }
   let control = "";
   const role = state.session?.profile?.role || "data_entry";
-  const locked = field.lockForAll || (field.lockForNonAdmin && role !== "admin");
+  const locked = field.lockForAll || (field.lockForNonAdmin && role !== "admin")
+    || ((field.lockForDistributor || field.key === "delegate_id") && role === "distributor");
   const common = `id="field-${field.key}" name="${field.key}" class="form-control" autocomplete="off" ${field.required ? "required" : ""} ${locked ? "disabled data-locked=\"true\"" : ""}`;
   if (field.type === "autocompleteRelation") {
     const selected = relationOptions.find(option => String(option.value) === String(value ?? ""));
@@ -611,6 +645,14 @@ async function preparePayloadForSave(cfg, payload, relationMap) {
     if (!approved) throw new Error("أُلغي الحفظ لتعديل تاريخ السند.");
   }
   if (cfg.table === "delegates" && !payload.profile_id && !payload.phone) throw new Error("أدخل رقم الهاتف أو اربط الموزع بحساب مستخدم.");
+  if (cfg.table === "beneficiaries" && state.session?.profile?.role === "distributor") {
+    if (!state.session.profile.can_create_beneficiaries) throw new Error("لم يمنحك مدير النظام صلاحية إضافة مستفيدين جدد.");
+    if (!state.session.profile.delegate_id) throw new Error("حسابك غير مربوط بسجل موزع نشط.");
+    payload.delegate_id = state.session.profile.delegate_id;
+    payload.status = "under_review";
+    delete payload.approved_by;
+    delete payload.approved_at;
+  }
   const findRelation = (fieldKey, id) => (relationMap.get(fieldKey) || []).find(x => String(x.value) === String(id))?.row;
   if (cfg.table === "cash_transfers") {
     if (String(payload.from_cashbox_id) === String(payload.to_cashbox_id)) throw new Error("يجب اختيار صندوقين مختلفين.");
@@ -669,12 +711,19 @@ async function collectFormData(fields) {
       const rows = [...form.querySelectorAll(`[data-line-items="${field.key}"] .line-item-row`)];
       result[field.key] = rows.map(row => {
         const base = { item_id: row.querySelector(".line-item-product")?.value, quantity: Number(row.querySelector(".line-item-qty")?.value || 0) };
-        if (field.mode === "receipt") Object.assign(base, {
-          valid_qty: Number(row.querySelector(".line-item-valid")?.value || 0),
-          damaged_qty: Number(row.querySelector(".line-item-damaged")?.value || 0),
-          lot_no: row.querySelector(".line-item-lot")?.value || null,
-          expiry_date: row.querySelector(".line-item-expiry")?.value || null
-        });
+        if (field.mode === "receipt") {
+          const damaged = Number(row.querySelector(".line-item-damaged")?.value || 0);
+          const validInput = row.querySelector(".line-item-valid")?.value;
+          const valid = validInput === "" ? base.quantity - damaged : Number(validInput || 0);
+          if (base.quantity <= 0 || valid <= 0 || damaged < 0 || Math.abs(valid + damaged - base.quantity) > 0.0005) {
+            throw new Error("في القبض العيني يجب أن تساوي الكمية الكلية مجموع الصالح والتالف، وأن تكون الكمية الصالحة أكبر من صفر.");
+          }
+          Object.assign(base, {
+            valid_qty: valid, damaged_qty: damaged,
+            lot_no: row.querySelector(".line-item-lot")?.value || null,
+            expiry_date: row.querySelector(".line-item-expiry")?.value || null
+          });
+        }
         if (field.mode === "basket") base.required = row.querySelector(".line-item-required")?.value !== "false";
         return base;
       }).filter(row => row.item_id && row.quantity > 0);
@@ -704,9 +753,12 @@ async function handleRowAction(action, id) {
     if (action === "edit") return openRecordForm(cfg, record);
     if (action === "print") return printRecord(cfg, record);
     if (action === "toggle") {
-      const beneficiaryToggle = cfg.table === "beneficiaries";
-      const current = beneficiaryToggle ? record.status : record.is_active;
-      const shouldDisable = beneficiaryToggle ? current === "approved" : current === true;
+      const statusToggle = ["beneficiaries", "campaign_distributors", "authorized_devices"].includes(cfg.table);
+      const current = statusToggle ? record.status : record.is_active;
+      const shouldDisable = cfg.table === "beneficiaries" ? current === "approved"
+        : cfg.table === "campaign_distributors" ? current === "active"
+        : cfg.table === "authorized_devices" ? current === "approved"
+        : current === true;
       const ok = await confirmDialog(`هل تريد ${shouldDisable ? "إيقاف" : "تفعيل"} هذا ${cfg.singular}؟`, "تغيير الحالة", "تأكيد");
       if (!ok) return;
       await dataService.action(cfg.table, id, "toggle", { current });
@@ -757,9 +809,14 @@ async function handleRowAction(action, id) {
     } else if (action === "export") {
       return exportRows([record], `${cfg.table}-${id}.csv`);
     } else if (action === "reopen") {
-      const ok = await confirmDialog("إعادة فتح الإقفال عملية حساسة وستسجل في سجل التدقيق.", "إعادة فتح الحساب", "إعادة فتح", true);
+      const label = cfg.table === "campaign_distributors" ? "تخصيص الموزع" : "الحساب";
+      const ok = await confirmDialog(`إعادة فتح ${label} تعيد فقط المرتجع الناتج تلقائياً عن آخر تسوية، وستسجل العملية في التدقيق.`, `إعادة فتح ${label}`, "إعادة فتح", true);
       if (!ok) return;
-      await dataService.action(cfg.table, id, "reopen");
+      await dataService.action(cfg.table, id, "reopen", { reason: "إعادة فتح من واجهة النظام" });
+    } else if (action === "retry") {
+      const ok = await confirmDialog("سيعاد السجل الفاشل إلى قائمة الانتظار دون تكرار أي عملية ناجحة. هل تريد المتابعة؟", "إعادة المحاولة", "إعادة إلى الانتظار");
+      if (!ok) return;
+      await dataService.action(cfg.table, id, "retry");
     } else {
       return toast(`الإجراء «${action}» غير مربوط بعد بهذه الشاشة.`, "warning");
     }
@@ -953,10 +1010,10 @@ async function renderSettings(tab = "general") {
   ];
   let panel = "";
   if (tab === "general") panel = `<h3>الإعدادات العامة</h3><p>هوية النظام والعملات وصيغة أرقام السندات.</p><form id="settings-form" class="form-grid"><div class="form-field"><label>اسم الجهة</label><input class="form-control" name="organization_name" value="${escapeHtml(s.organization_name || "")}"></div><div class="form-field"><label>اسم النظام</label><input class="form-control" name="system_name" value="${escapeHtml(s.system_name || "")}"></div><div class="form-field"><label>العملة الافتراضية</label><select class="form-control" name="currency"><option value="YER" ${s.currency === "YER" ? "selected" : ""}>ريال يمني</option><option value="SAR" ${s.currency === "SAR" ? "selected" : ""}>ريال سعودي</option><option value="USD" ${s.currency === "USD" ? "selected" : ""}>دولار أمريكي</option></select></div><div class="form-field"><label>سنوات الاحتفاظ بالبيانات</label><input class="form-control" type="number" name="retention_years" value="${s.retention_years || 10}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>`;
-  else if (tab === "policies") panel = `<h3>سياسات العمل والتحقق</h3><p>يمكن تغيير هذه الخيارات دون تعديل الكود.</p><form id="settings-form" class="form-grid"><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الصرف يحتاج اعتماداً</strong><small>تُحفظ سندات الموزعين تحت المراجعة قبل الترحيل.</small></div><label class="switch"><input name="require_payment_approval" type="checkbox" ${s.require_payment_approval ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل التلقائي لكل العمليات</strong><small>بعد الحفظ يتم ترحيل العمليات المالية والعينية تلقائياً بعد فحص الرصيد والصلاحيات. عند عدم الاتصال تحفظ العملية في قائمة المزامنة وتُرحل بعد عودة الشبكة.</small></div><label class="switch"><input name="auto_post_all_operations" type="checkbox" ${s.auto_post_all_operations ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالمسودات دون اتصال</strong><small>يحفظ النظام المسودة محلياً ويرسلها عند عودة الشبكة.</small></div><label class="switch"><input name="allow_offline_drafts" type="checkbox" ${s.allow_offline_drafts ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالترحيل النهائي دون اتصال</strong><small>غير موصى به لأن الرصيد يجب أن يعاد فحصه في الخادم.</small></div><label class="switch"><input name="allow_final_offline" type="checkbox" ${s.allow_final_offline ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field"><label>طريقة الترحيل والمزامنة</label><select class="form-control" name="sync_mode"><option value="automatic" ${s.sync_mode !== "manual" ? "selected" : ""}>تلقائية عند عودة الإنترنت</option><option value="manual" ${s.sync_mode === "manual" ? "selected" : ""}>يدوية من شاشة المزامنة</option></select></div><div class="form-field"><label>عدد محاولات الدخول</label><input class="form-control" name="max_login_attempts" type="number" min="1" max="20" value="${s.max_login_attempts || 5}"></div><div class="form-field"><label>مدة الإيقاف المؤقت بالدقائق</label><input class="form-control" name="lockout_minutes" type="number" min="1" max="1440" value="${s.lockout_minutes || 15}"></div><div class="form-field"><label>تنبيه الصلاحية قبل</label><input class="form-control" name="stock_alert_days" type="number" value="${s.stock_alert_days || 30}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ السياسات</button></div>`;
+  else if (tab === "policies") panel = `<h3>سياسات العمل والتحقق</h3><p>يمكن تغيير هذه الخيارات دون تعديل الكود.</p><form id="settings-form" class="form-grid"><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الصرف يحتاج اعتماداً</strong><small>تُحفظ سندات الموزعين تحت المراجعة قبل الترحيل.</small></div><label class="switch"><input name="require_payment_approval" type="checkbox" ${s.require_payment_approval ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل التلقائي لكل العمليات</strong><small>بعد الحفظ يتم الترحيل عند وجود اتصال وبعد فحص الرصيد والصلاحيات؛ المسودة غير المتصلة تُزامن أولاً ثم تنتظر الترحيل الآمن.</small></div><label class="switch"><input name="auto_post_all_operations" type="checkbox" ${s.auto_post_all_operations ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالمسودات دون اتصال</strong><small>يحفظ النظام المسودة محلياً ويرسلها عند عودة الشبكة.</small></div><label class="switch"><input name="allow_offline_drafts" type="checkbox" ${s.allow_offline_drafts ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل النهائي دون اتصال</strong><small>غير متاح أمنياً؛ يجب أن يعيد الخادم فحص الرصيد والتكرار لحظة الترحيل.</small></div><label class="switch"><input name="allow_final_offline" type="checkbox" disabled><span class="switch-slider"></span></label></div></div><div class="form-field"><label>طريقة الترحيل والمزامنة</label><select class="form-control" name="sync_mode"><option value="automatic" ${s.sync_mode !== "manual" ? "selected" : ""}>تلقائية عند عودة الإنترنت</option><option value="manual" ${s.sync_mode === "manual" ? "selected" : ""}>يدوية من شاشة المزامنة</option></select></div><div class="form-field"><label>عدد محاولات الدخول</label><input class="form-control" name="max_login_attempts" type="number" min="1" max="20" value="${s.max_login_attempts || 5}"></div><div class="form-field"><label>مدة الإيقاف المؤقت بالدقائق</label><input class="form-control" name="lockout_minutes" type="number" min="1" max="1440" value="${s.lockout_minutes || 15}"></div><div class="form-field"><label>تنبيه الصلاحية قبل</label><input class="form-control" name="stock_alert_days" type="number" value="${s.stock_alert_days || 30}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ السياسات</button></div>`;
   else if (tab === "printing") panel = `<h3>إعدادات الطباعة</h3><p>تخصيص النصوص التي تظهر في السندات والتقارير.</p><form id="settings-form" class="form-grid"><div class="form-field full"><label>تذييل الطباعة</label><textarea class="form-control" name="print_footer">${escapeHtml(s.print_footer || "")}</textarea></div></form><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="ghost-button" onclick="window.print()"><i class="fa-solid fa-print"></i> اختبار الطباعة</button><button class="primary-button" data-save-settings>حفظ</button></div>`;
-  else if (tab === "backup") panel = `<h3>النسخ الاحتياطي والاستعادة</h3><p>التنزيل يحفظ CSV لكل جدول وملف JSON كامل قابل للاستعادة في وضع العرض.</p><div class="detail-grid"><div class="detail-item full"><span>إنشاء نسخة</span><strong>نسخة ZIP كاملة مع بيانات الإصدار</strong><button class="secondary-button" data-download-backup style="margin-top:10px"><i class="fa-solid fa-download"></i> تنزيل النسخة</button></div><div class="detail-item full"><span>استعادة نسخة</span><strong>اختر ملف ZIP أو JSON سبق تنزيله</strong><input id="restore-backup-file" class="form-control" type="file" accept=".zip,.json" style="margin-top:10px"><button class="secondary-button" data-restore-backup style="margin-top:10px"><i class="fa-solid fa-upload"></i> استعادة النسخة</button></div><div class="detail-item full"><span>إعادة بيانات العرض الأصلية</span><button class="danger-button" data-reset-demo style="margin-top:10px"><i class="fa-solid fa-rotate-left"></i> إعادة الضبط</button></div></div>`;
-  else panel = `<h3>حالة النظام</h3><p>صفحة تشخيص توضح بيئة التشغيل والاتصال والمزامنة والإصدار؛ لا تغيّر البيانات.</p><div class="detail-grid"><div class="detail-item"><span>الإصدار</span><strong>${escapeHtml(config.version || "11.2.2")} — ${escapeHtml(config.releaseName || "")}</strong></div><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${isOnline() ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>عمليات تنتظر المزامنة</span><strong>${getOfflineQueue().filter(x => ["queued","failed"].includes(x.status)).length}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>مفتاح الواجهة anon/publishable فقط، والحماية الفعلية عبر RLS والدوال المقيدة.</strong></div></div>`;
+  else if (tab === "backup") panel = `<h3>النسخ الاحتياطي والاستعادة</h3><p>نسخة أعمال موقعة بالبصمة، واستعادة ذرّية تعمل على Supabase الحي. النسخة الكاملة للمشروع (Auth وStorage وإعدادات Edge Functions) تُدار من لوحة Supabase أو CLI.</p><div class="detail-grid"><div class="detail-item full"><span>إنشاء نسخة</span><strong>ZIP يحوي JSON موقعاً وCSV لكل جدول أعمال</strong><button class="secondary-button" data-download-backup style="margin-top:10px"><i class="fa-solid fa-download"></i> تنزيل النسخة</button></div><div class="detail-item full"><span>استعادة آمنة</span><strong>دمج ذرّي مع فحص البصمة والتكامل المالي قبل اعتماد النتيجة</strong><input id="restore-backup-file" class="form-control" type="file" accept=".zip,.json" style="margin-top:10px"><button class="secondary-button" data-restore-backup style="margin-top:10px"><i class="fa-solid fa-upload"></i> فحص واستعادة النسخة</button></div>${dataService.demoMode ? `<div class="detail-item full"><span>إعادة بيانات العرض الأصلية</span><button class="danger-button" data-reset-demo style="margin-top:10px"><i class="fa-solid fa-rotate-left"></i> إعادة الضبط</button></div>` : ""}</div>`;
+  else panel = `<h3>حالة النظام</h3><p>صفحة تشخيص توضح بيئة التشغيل والاتصال والمزامنة والإصدار؛ لا تغيّر البيانات.</p><div class="detail-grid"><div class="detail-item"><span>الإصدار</span><strong>${escapeHtml(config.version || "12.0.0")} — ${escapeHtml(config.releaseName || "")}</strong></div><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${isOnline() ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>عمليات تنتظر المزامنة</span><strong>${getOfflineQueue().filter(x => ["queued","failed"].includes(x.status)).length}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>مفتاح الواجهة anon/publishable فقط، والحماية الفعلية عبر RLS والدوال المقيدة.</strong></div></div>`;
   els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">إدارة الخيارات العامة والنسخ الاحتياطي وفق صلاحية مدير النظام.</div></section><section class="settings-layout"><nav class="settings-nav">${nav.map(x => `<button class="${tab === x[0] ? "active" : ""}" data-settings-tab="${x[0]}"><i class="${x[1]}"></i>${x[2]}</button>`).join("")}</nav><article class="settings-panel">${panel}</article></section>`;
 }
 
@@ -1182,7 +1239,8 @@ async function openQuickDelivery() {
 function csvEscape(value) { return `"${String(value ?? "").replaceAll('"','""')}"`; }
 async function downloadAllTablesZip() {
   if (!window.JSZip) throw new Error("مكتبة ZIP غير متاحة.");
-  const all = await dataService.exportAllTables();
+  const backup = await dataService.createApplicationBackup();
+  const all = backup.tables || {};
   const zip = new JSZip();
   Object.entries(all).forEach(([table, rows]) => {
     const safeRows = Array.isArray(rows) ? rows : [];
@@ -1190,14 +1248,13 @@ async function downloadAllTablesZip() {
     const csv = "\uFEFF" + (keys.length ? [keys.map(csvEscape).join(","), ...safeRows.map(r => keys.map(k => csvEscape(typeof r[k] === "object" && r[k] !== null ? JSON.stringify(r[k]) : r[k])).join(","))].join("\n") : "");
     zip.file(`${table}.csv`, csv);
   });
-  zip.file("backup.json", JSON.stringify({ format: "zakat-backup-v1", version: config.version || "11.2.2", exported_at: new Date().toISOString(), tables: all }, null, 2));
-  zip.file("backup_metadata.json", JSON.stringify({ format: "zakat-backup-v1", version: config.version || "11.2.2", exported_at: new Date().toISOString(), tables: Object.keys(all) }, null, 2));
+  zip.file("backup.json", JSON.stringify(backup, null, 2));
+  zip.file("backup_metadata.json", JSON.stringify({ format: backup.format, version: backup.version, exported_at: backup.exported_at, checksum: backup.checksum, counts: backup.counts }, null, 2));
   const blob = await zip.generateAsync({ type: "blob", compression: "DEFLATE" });
   const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href=url; a.download=`zakat-full-backup-${new Date().toISOString().slice(0,10)}.zip`; a.click(); setTimeout(()=>URL.revokeObjectURL(url),1000);
 }
 
 async function restoreBackupFile(file) {
-  if (!dataService.demoMode) throw new Error("الاستعادة المباشرة من الواجهة مقصورة على وضع العرض. في Supabase استخدم نسخة قاعدة البيانات أو ترحيل الإدارة المرفق.");
   let backup;
   if (file.name.toLowerCase().endsWith(".zip")) {
     if (!window.JSZip) throw new Error("مكتبة ZIP غير متاحة.");
@@ -1206,10 +1263,11 @@ async function restoreBackupFile(file) {
     if (!entry) throw new Error("ملف ZIP لا يحتوي backup.json صالحاً.");
     backup = JSON.parse(await entry.async("text"));
   } else backup = JSON.parse(await file.text());
-  if (backup?.format !== "zakat-backup-v1" || !backup.tables) throw new Error("صيغة النسخة الاحتياطية غير معروفة.");
-  const ok = await confirmDialog("ستستبدل بيانات العرض الحالية بمحتوى النسخة المختارة. هل تريد المتابعة؟", "استعادة نسخة احتياطية", "استعادة", true);
+  if (!["zakat-backup-v1", "zakat-backup-v2"].includes(backup?.format) || !backup.tables) throw new Error("صيغة النسخة الاحتياطية غير معروفة.");
+  const legacyWarning = backup.format === "zakat-backup-v1" ? " هذه نسخة قديمة غير موقعة؛ سيُسجل ذلك في التدقيق." : "";
+  const ok = await confirmDialog(`ستُفحص البصمة والحسابات ثم تُدمج بيانات النسخة ذرّياً داخل Supabase. عند فشل أي فحص يُلغى كل شيء تلقائياً.${legacyWarning} هل تريد المتابعة؟`, "استعادة نسخة احتياطية", "استعادة", true);
   if (!ok) return false;
-  await dataService.restoreBackup(backup.tables);
+  await dataService.restoreBackup(backup);
   return true;
 }
 
@@ -1258,6 +1316,7 @@ function renderCommandResults(query) {
 }
 
 async function handleGlobalClick(event) {
+  if (state.currentScreen === "ai-assistant" && await handleAssistantInteraction(event, els.pageContent, dataService, state.session)) return;
   const nav = event.target.closest("[data-nav]");
   if (nav) return navigate(nav.dataset.nav);
   const commandNav = event.target.closest("[data-command-nav]");

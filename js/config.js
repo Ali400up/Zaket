@@ -4,16 +4,17 @@
  * مفتاح anon/publishable مصمم للاستخدام في الواجهة مع تفعيل RLS.
  */
 window.ZAKAT_CONFIG = {
-  supabaseUrl: "https://pgnpuspqnkmmnjpvejnq.supabase.co",
-  supabaseAnonKey: "sb_publishable_XLCnJyBDtJ_UQRjSQQO_5A_akuKCEy1",
+  supabaseUrl: "https://zqmdbtgbzkybddhlzdif.supabase.co",
+  supabaseAnonKey: "sb_publishable_YcwGuxEwjB_u5StXPWd62w_OiYz_L7k",
   demoMode: false,
   edgeFunctions: {
     createUser: "create-user",
-    resetUserPassword: "reset-user-password"
+    resetUserPassword: "reset-user-password",
+    geminiAssistant: "gemini-assistant"
   },
   appName: "نظام إدارة الزكاة والتبرعات",
-  version: "11.2.2",
-  releaseName: "النسخة الموحدة المراجعة",
+  version: "12.0.0",
+  releaseName: "النسخة الموحدة الآمنة مع المساعد الذكي",
   currency: "YER",
   locale: "ar-YE",
   pageSize: 10,

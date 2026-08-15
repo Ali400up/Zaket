@@ -47,6 +47,7 @@ export const statusLabels = {
 export const menuSections = [
   { label: "الرئيسية", items: [
     { id: "dashboard", label: "لوحة التحكم", icon: "fa-solid fa-grid-2" },
+    { id: "ai-assistant", label: "المساعد الذكي", icon: "fa-solid fa-wand-magic-sparkles" },
     { id: "global-search", label: "البحث العام", icon: "fa-solid fa-magnifying-glass" },
     { id: "guide", label: "دليل الاستخدام", icon: "fa-solid fa-circle-question" }
   ]},
@@ -157,6 +158,7 @@ export const screenConfigs = {
       { key: "delegate_type", label: "نوع الموزع", type: "select", required: true, options: [
         { value: "cash", label: "نقدي" }, { value: "in_kind", label: "عيني" }, { value: "both", label: "نقدي وعيني" }
       ]},
+      { key: "can_create_beneficiaries", label: "يسمح له بإضافة مستفيدين جدد", type: "switch", default: false, full: true, help: "يضيف الموزع المستفيد تحت المراجعة ومربوطاً بحسابه تلقائياً؛ ولا يستطيع اعتماده أو تغيير موزعه." },
       { key: "is_active", label: "الموزع نشط", type: "switch", default: true },
       { key: "notes", label: "ملاحظات", type: "textarea", full: true }
     ],
@@ -281,7 +283,7 @@ export const screenConfigs = {
       { key: "monthly_income", label: "الدخل الشهري", type: "currency", min: 0 },
       { key: "category_id", label: "فئة المستفيد", type: "relation", relation: { table: "beneficiary_categories", label: "name" }, required: true },
       { key: "health_condition_id", label: "الحالة الصحية", type: "relation", relation: { table: "health_conditions", label: "name" } },
-      { key: "delegate_id", label: "الموزع المسؤول", type: "relation", relation: { table: "delegates", label: "full_name" } },
+      { key: "delegate_id", label: "الموزع المسؤول", type: "relation", relation: { table: "delegates", label: "full_name" }, lockForDistributor: true, help: "يُختار حساب الموزع الحالي تلقائياً ولا يستطيع تغييره." },
       { key: "priority", label: "الأولوية", type: "select", default: "medium", options: [
         { value: "critical", label: "عاجلة جداً" }, { value: "high", label: "عالية" }, { value: "medium", label: "متوسطة" }, { value: "low", label: "منخفضة" }
       ]},
@@ -381,10 +383,10 @@ export const screenConfigs = {
       { key: "cashbox_id", label: "الصندوق المرتبط", type: "relation", relation: { table: "cashboxes", label: "name", filter: { is_active: true } }, required: true },
       { key: "area_name", label: "المنطقة أو الحارة", type: "text", required: true },
       { key: "allocated_amount", label: "حد الصرف المخصص", type: "currency", default: 0, min: 0 },
-      { key: "status", label: "الحالة", type: "select", default: "active", options: [{ value: "active", label: "نشط" }, { value: "settled", label: "تمت التسوية" }, { value: "suspended", label: "موقوف" }] },
+      { key: "status", label: "الحالة (من أزرار الإجراء)", type: "select", default: "active", lockForAll: true, help: "استخدم أزرار الإيقاف أو التسوية أو إعادة الفتح حتى تبقى الأرصدة قابلة للتدقيق.", options: [{ value: "active", label: "نشط" }, { value: "settled", label: "تمت التسوية" }, { value: "suspended", label: "موقوف" }] },
       { key: "notes", label: "ملاحظات", type: "textarea", full: true }
     ],
-    actions: ["view", "edit", "statement", "settle", "toggle"]
+    actions: ["view", "edit", "statement", "settle", "reopen", "toggle"]
   },
   cash_receipts: {
     title: "سندات القبض النقدي",
@@ -627,7 +629,7 @@ export const screenConfigs = {
   devices: {
     title:"الأجهزة المرخصة",description:"ينشئ النظام بصمة محلية للجهاز عند الدخول، ويمنع الجهاز الجديد حتى يوافق المدير عليه، مع إمكانية الحظر.",table:"authorized_devices",icon:"fa-solid fa-laptop-file",singular:"جهاز",primaryLabel:null,
     columns:[{key:"device_name",label:"الجهاز",type:"name",subKey:"fingerprint"},{key:"user_name",label:"المستخدم"},{key:"platform",label:"النظام"},{key:"last_seen_at",label:"آخر ظهور",type:"datetime"},{key:"status",label:"الحالة",type:"status"}],
-    fields:[{key:"device_name",label:"اسم الجهاز",type:"text",required:true},{key:"user_id",label:"المستخدم",type:"relation",relation:{table:"profiles",label:"full_name"},required:true},{key:"fingerprint",label:"بصمة الجهاز",type:"text",required:true},{key:"platform",label:"النظام والمتصفح",type:"text"},{key:"status",label:"الحالة",type:"select",default:"approved",options:[{value:"pending",label:"بانتظار الموافقة"},{value:"approved",label:"مرخص"},{value:"blocked",label:"محظور"}]},{key:"notes",label:"ملاحظات",type:"textarea",full:true}], actions:["view","edit","toggle"]
+    fields:[{key:"device_name",label:"اسم الجهاز",type:"text",required:true},{key:"user_id",label:"المستخدم",type:"relation",relation:{table:"profiles",label:"full_name"},required:true},{key:"fingerprint",label:"بصمة الجهاز",type:"text",required:true},{key:"platform",label:"النظام والمتصفح",type:"text"},{key:"status",label:"الحالة (من زر التشغيل/الإيقاف)",type:"select",default:"approved",lockForAll:true,help:"تغيير الترخيص يتم حصراً من زر التشغيل/الإيقاف ويسجل في سجل التدقيق.",options:[{value:"pending",label:"بانتظار الموافقة"},{value:"approved",label:"مرخص"},{value:"blocked",label:"محظور"}]},{key:"notes",label:"ملاحظات",type:"textarea",full:true}], actions:["view","edit","toggle"]
   },
   login_attempts: {
     title:"محاولات تسجيل الدخول",description:"كل دخول ناجح أو فاشل أو مرفوض بسبب جهاز غير معتمد، مع الوقت والجهاز وسبب النتيجة.",table:"login_attempts",icon:"fa-solid fa-shield-halved",singular:"محاولة",primaryLabel:null,
