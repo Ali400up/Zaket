@@ -1,0 +1,14 @@
+project_id = "zakat-management-system"
+
+[functions.create-user]
+# The function validates the bearer token, active administrator and approved
+# device internally. This also supports current Supabase publishable keys.
+verify_jwt = false
+
+[functions.reset-user-password]
+verify_jwt = false
+
+[functions.gemini-assistant]
+# New Supabase publishable keys are not JWTs. The function validates the bearer
+# token with auth.getUser(), the approved device and the active profile itself.
+verify_jwt = false
