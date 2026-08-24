@@ -84,3 +84,13 @@ export function validateCashTransfer({ from, to, amount }) {
   if (money(from.current_balance || 0) < requested) throw new Error("رصيد الصندوق المحول منه غير كافٍ.");
   return { amount: requested, currency: from.currency };
 }
+
+export function validateCashboxUserAssignment({ cashbox_id, user_id, delegate_id, daily_limit }) {
+  if (!cashbox_id) throw new Error("يجب تحديد الصندوق.");
+  if ([user_id, delegate_id].filter(Boolean).length !== 1) {
+    throw new Error("اختر مستخدماً واحداً أو موزعاً واحداً لصلاحية الصندوق، لا كليهما.");
+  }
+  const limit = money(daily_limit ?? 0);
+  if (limit < 0) throw new Error("حد الصرف اليومي لا يقبل قيمة سالبة.");
+  return { daily_limit: limit };
+}

@@ -80,6 +80,11 @@ export const menuSections = [
     { id: "in-kind-payments", label: "سندات الصرف العيني", icon: "fa-solid fa-box-open" }
   ]},
   { label: "الخدمات والبيانات", items: [
+    { id: "wallet-providers", label: "المحافظ وشركات الحوالات", icon: "fa-solid fa-mobile-screen-button" },
+    { id: "bulk-disbursements", label: "دفعات الصرف الجماعي", icon: "fa-solid fa-file-export" },
+    { id: "disbursement-results", label: "نتائج دفعات الصرف", icon: "fa-solid fa-file-circle-check" },
+    { id: "messages", label: "الرسائل", icon: "fa-solid fa-envelope" },
+    { id: "message-templates", label: "قوالب الرسائل", icon: "fa-solid fa-file-lines" },
     { id: "imports", label: "الاستيراد من Excel", icon: "fa-solid fa-file-import" },
     { id: "sync", label: "الاتصال والمزامنة", icon: "fa-solid fa-arrows-rotate" }
   ]},

@@ -3,17 +3,43 @@ import { supabase, isSupabaseConfigured, getCurrentSession, getCurrentProfile } 
 import { queueOperation, syncOfflineQueue } from "./offline.js";
 import { isOnline } from "./connectivity.js";
 import { getDeviceFingerprint, getDeviceName } from "./device-identity.js";
-import { nextBeneficiaryStatus, nextCampaignDistributorStatus, nextDeviceStatus, settleAllocation, reopenAllocation, cancelPaymentAgainstAllocation, validateCashTransfer } from "./state-machines.js";
+import { nextBeneficiaryStatus, nextCampaignDistributorStatus, nextDeviceStatus, settleAllocation, reopenAllocation, cancelPaymentAgainstAllocation, validateCashTransfer, validateCashboxUserAssignment } from "./state-machines.js";
+import { sha256Hex, utf8ByteLength, BACKUP_V3_PART_LIMIT, BACKUP_V3_PART_BYTES_LIMIT } from "./backup-v3.js";
+import { createBackupManagerClient } from "./backup-edge-client.js";
 
-const DB_KEY = "zakat_demo_database_v12";
-const SESSION_KEY = "zakat_demo_session_v12";
+const DB_KEY = "zakat_demo_database_v12_1";
+const SESSION_KEY = "zakat_demo_session_v12_1";
 const config = window.ZAKAT_CONFIG || {};
-const LIVE_CACHE_KEY = "zakat_live_cache_v12";
+const liveBackupManager = isSupabaseConfigured
+  ? createBackupManagerClient({
+      supabase,
+      functionName: config.edgeFunctions?.backupManager || "backup-manager",
+      getFingerprint: getDeviceFingerprint,
+    })
+  : null;
+const LIVE_CACHE_KEY = "zakat_live_cache_v12_1";
 const LEGACY_LIVE_CACHE_KEYS = ["zakat_live_cache_v11_2", "zakat_live_cache_v11_2_1"];
-const OFFLINE_SESSION_KEY = "zakat_offline_session_v12";
-const USER_SESSION_KEY = "zakat_active_user_session_v12";
+const OFFLINE_SESSION_KEY = "zakat_offline_session_v12_1";
+const USER_SESSION_KEY = "zakat_active_user_session_v12_1";
 const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","items","warehouses","stock_balances","system_settings"]);
 const DISTRIBUTOR_SCOPED_TABLES = new Set(["beneficiaries", "cash_payments", "in_kind_payments", "distribution_assignments"]);
+const BACKUP_V3_BUSINESS_TABLES = [
+  "branches","profiles","delegates","donors","beneficiary_categories","health_conditions",
+  "units","items","warehouses","cashboxes","campaigns","beneficiaries",
+  "beneficiary_household_members","cashbox_users","wallet_providers","message_templates",
+  "baskets","basket_items","cash_receipts","campaign_funding","campaign_distributors",
+  "cash_transfers","cash_payments","cashbox_ledger","in_kind_receipts",
+  "in_kind_receipt_details","campaign_in_kind_funding","campaign_in_kind_funding_details",
+  "inventory_lots","inventory_movements","stock_balances","in_kind_payments",
+  "in_kind_payment_details","bulk_disbursements","disbursement_results","messages",
+  "distribution_assignments","account_closings","attachments","system_settings"
+];
+const BACKUP_V3_ADMIN_TABLES = [
+  "authorized_devices","login_attempts","user_sessions","user_archives","import_jobs",
+  "audit_logs","ai_conversations","ai_messages","ai_action_requests","system_knowledge_articles"
+];
+const demoBackupV3Exports = new Map();
+const demoBackupV3Restores = new Map();
 
 function readLiveCache() {
   try { return JSON.parse(localStorage.getItem(LIVE_CACHE_KEY) || "{}"); } catch { return {}; }
@@ -357,6 +383,7 @@ function validateDemoCreate(db, table, data, editingId = null) {
   if (table === "items") duplicate("name", "الصنف موجود مسبقاً.");
   if (["beneficiary_categories", "health_conditions"].includes(table)) duplicate("name", "القيمة موجودة مسبقاً.");
   if (table === "campaigns" && data.start_date && data.end_date && data.end_date < data.start_date) throw new Error("تاريخ النهاية يسبق تاريخ البداية.");
+  if (table === "cashbox_users") Object.assign(data, validateCashboxUserAssignment(data));
   if (table === "campaign_distributors") {
     const campaignId = data.campaign_id || findById(db, table, editingId)?.campaign_id;
     const allocatedAmount = Number(data.allocated_amount ?? findById(db, table, editingId)?.allocated_amount ?? 0);
@@ -1294,6 +1321,177 @@ export const dataService = {
     return { success, failed: errors.length, errors };
   },
 
+  async startBackupV3({ scope = "business", consistent = false } = {}) {
+    if (!["business", "administrative"].includes(scope)) throw new Error("نطاق النسخة الاحتياطية غير صالح.");
+    if (!isSupabaseConfigured) {
+      const db = clone(ensureDemoDb());
+      const tables = [...BACKUP_V3_BUSINESS_TABLES, ...(scope === "administrative" ? BACKUP_V3_ADMIN_TABLES : [])]
+        .filter(table => Array.isArray(db[table]))
+        .map((table, index) => ({ table, rank: index + 1 }));
+      const sessionId = uid("backup-v3-export");
+      const dataRevision = Date.now();
+      demoBackupV3Exports.set(sessionId, { db, scope, consistent: Boolean(consistent), dataRevision, tables });
+      return {
+        session_id: sessionId,
+        format: "zakat-backup-v3",
+        scope,
+        data_revision: dataRevision,
+        expires_at: new Date(Date.now() + 45 * 60 * 1000).toISOString(),
+        integrity_before: [],
+        tables,
+        part_limit: BACKUP_V3_PART_LIMIT,
+        part_bytes_limit: BACKUP_V3_PART_BYTES_LIMIT
+      };
+    }
+    try { return await liveBackupManager.startExport({ scope, consistent }); }
+    catch (error) { throw new Error("تعذر بدء النسخة الاحتياطية V3: " + error.message); }
+  },
+
+  async readBackupV3Part(sessionId, table, afterId = null, limit = 100) {
+    const safeLimit = Math.max(1, Math.min(BACKUP_V3_PART_LIMIT, Number(limit) || 100));
+    if (!isSupabaseConfigured) {
+      const session = demoBackupV3Exports.get(sessionId);
+      if (!session || !session.tables.some(item => item.table === table)) throw new Error("جلسة النسخ التجريبي انتهت أو الجدول غير مسموح.");
+      const rows = clone(session.db[table] || [])
+        .sort((left, right) => String(left?.id ?? "").localeCompare(String(right?.id ?? "")));
+      const partRows = rows
+        .filter(row => !afterId || String(row?.id ?? "") > String(afterId))
+        .slice(0, safeLimit);
+      const rowsText = JSON.stringify(partRows);
+      return {
+        table,
+        rows: partRows,
+        rows_text: rowsText,
+        row_count: partRows.length,
+        checksum: await sha256Hex(rowsText),
+        next_cursor: partRows.length ? String(partRows[partRows.length - 1]?.id ?? "") : null,
+        done: partRows.length < safeLimit,
+        data_revision: session.dataRevision
+      };
+    }
+    try { return await liveBackupManager.exportPart(sessionId, table, afterId || null, safeLimit); }
+    catch (error) { throw new Error("تعذر قراءة جزء النسخة لجدول " + table + ": " + error.message); }
+  },
+
+  async finishBackupV3(sessionId) {
+    if (!isSupabaseConfigured) {
+      const session = demoBackupV3Exports.get(sessionId);
+      if (!session) throw new Error("جلسة النسخ التجريبي انتهت.");
+      demoBackupV3Exports.delete(sessionId);
+      return { session_id: sessionId, ready: true, data_revision: session.dataRevision };
+    }
+    try { return await liveBackupManager.finishExport(sessionId); }
+    catch (error) { throw new Error("تعذر اعتماد النسخة الاحتياطية: " + error.message); }
+  },
+
+  async cancelBackupV3(sessionId) {
+    if (!sessionId) return { cancelled: false };
+    if (!isSupabaseConfigured) {
+      const cancelled = demoBackupV3Exports.delete(sessionId);
+      return { session_id: sessionId, cancelled, lock_released: true, demo: true };
+    }
+    try { return await liveBackupManager.cancelExport(sessionId); }
+    catch (error) { throw new Error("تعذر تحرير جلسة النسخ الاحتياطي: " + error.message); }
+  },
+
+  async startRestoreV3(manifest, mode = "merge") {
+    if (!manifest || manifest.format !== "zakat-backup-v3") throw new Error("تعريف نسخة V3 غير صالح.");
+    if (!["merge", "exact"].includes(mode)) throw new Error("وضع الاستعادة غير صالح.");
+    if (!isSupabaseConfigured) {
+      const sessionId = uid("backup-v3-restore");
+      demoBackupV3Restores.set(sessionId, { manifest: clone(manifest), mode, parts: new Map(), createdAt: Date.now() });
+      return {
+        session_id: sessionId,
+        scope: manifest.scope || "business",
+        mode,
+        expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
+      };
+    }
+    try { return await liveBackupManager.startRestore(manifest, mode); }
+    catch (error) { throw new Error("تعذر بدء جلسة الاستعادة: " + error.message); }
+  },
+
+  async stageRestoreV3Part(sessionId, table, partNo, rowsText, checksum) {
+    const safeText = String(rowsText ?? "");
+    if (utf8ByteLength(safeText) > BACKUP_V3_PART_BYTES_LIMIT) throw new Error("حجم الجزء أكبر من الحد الآمن للاستعادة.");
+    if (!isSupabaseConfigured) {
+      const session = demoBackupV3Restores.get(sessionId);
+      if (!session) throw new Error("جلسة الاستعادة التجريبية انتهت.");
+      const descriptor = session.manifest?.tables?.[table]?.parts?.find(part => Number(part.part_no) === Number(partNo));
+      if (!descriptor) throw new Error("الجزء غير موجود في manifest.");
+      const calculated = await sha256Hex(safeText);
+      let rows;
+      try { rows = JSON.parse(safeText); } catch { throw new Error("جزء الاستعادة لا يحتوي JSON صالحاً."); }
+      if (!Array.isArray(rows) || rows.length !== Number(descriptor.row_count) || calculated !== checksum || descriptor.checksum !== checksum) {
+        throw new Error("بصمة الجزء أو عدد صفوفه غير متطابق.");
+      }
+      const key = table + ":" + partNo;
+      const old = session.parts.get(key);
+      if (old && old.checksum !== checksum) throw new Error("تمت محاولة استبدال جزء تجريبي بمحتوى مختلف.");
+      session.parts.set(key, { table, partNo: Number(partNo), rowsText: safeText, checksum, rowCount: rows.length });
+      return { session_id: sessionId, table, part_no: Number(partNo), row_count: rows.length, already_staged: Boolean(old) };
+    }
+    try { return await liveBackupManager.stageRestorePart(sessionId, table, Number(partNo), safeText, checksum); }
+    catch (error) { throw new Error("فشل رفع جزء " + partNo + " من جدول " + table + ": " + error.message); }
+  },
+
+  async preflightRestoreV3(sessionId) {
+    if (!isSupabaseConfigured) {
+      const session = demoBackupV3Restores.get(sessionId);
+      if (!session) throw new Error("جلسة الاستعادة التجريبية انتهت.");
+      const tables = {};
+      const issues = [];
+      for (const [table, descriptor] of Object.entries(session.manifest.tables || {})) {
+        const expectedParts = Array.isArray(descriptor.parts) ? descriptor.parts.length : 0;
+        const expectedRows = Number(descriptor.row_count || 0);
+        const staged = [...session.parts.values()].filter(part => part.table === table);
+        const receivedRows = staged.reduce((total, part) => total + part.rowCount, 0);
+        tables[table] = { expected_parts: expectedParts, received_parts: staged.length, expected_rows: expectedRows, received_rows: receivedRows };
+        if (expectedParts !== staged.length || expectedRows !== receivedRows) {
+          issues.push({ kind: "parts", table, message: "الأجزاء المرفوعة لا تطابق manifest." });
+        }
+      }
+      const report = { ok: issues.length === 0, mode: session.mode, scope: session.manifest.scope, tables, issues, warnings: [], current_integrity: [] };
+      session.preflight = report;
+      return report;
+    }
+    try { return await liveBackupManager.preflightRestore(sessionId); }
+    catch (error) { throw new Error("تعذر إجراء المعاينة قبل الاستعادة: " + error.message); }
+  },
+
+  async commitRestoreV3(sessionId, confirmation) {
+    if (!isSupabaseConfigured) {
+      const session = demoBackupV3Restores.get(sessionId);
+      if (!session || !session.preflight?.ok) throw new Error("يلزم فحص ناجح قبل تنفيذ الاستعادة التجريبية.");
+      const expectedConfirmation = session.mode === "exact" ? "EXACT-RESTORE" : "MERGE-RESTORE";
+      if (confirmation !== expectedConfirmation) throw new Error("عبارة تأكيد الاستعادة غير صحيحة.");
+      const restored = clone(ensureDemoDb());
+      const counts = {};
+      for (const [table, descriptor] of Object.entries(session.manifest.tables || {})) {
+        const rows = [...session.parts.values()]
+          .filter(part => part.table === table)
+          .sort((left, right) => left.partNo - right.partNo)
+          .flatMap(part => JSON.parse(part.rowsText));
+        if (session.mode === "exact") restored[table] = rows;
+        else {
+          const existing = new Map((restored[table] || []).map(row => [String(row.id), row]));
+          rows.forEach(row => existing.set(String(row.id), row));
+          restored[table] = [...existing.values()];
+        }
+        counts[table] = rows.length;
+      }
+      (restored.system_settings || []).forEach(row => { row.allow_final_offline = false; });
+      writeDemoDb(restored);
+      demoBackupV3Restores.delete(sessionId);
+      return { success: true, session_id: sessionId, mode: session.mode, restored_rows: Object.values(counts).reduce((total, count) => total + count, 0), counts, demo: true };
+    }
+    let data;
+    try { data = await liveBackupManager.commitRestore(sessionId, confirmation); }
+    catch (error) { throw new Error("فشلت الاستعادة وتراجع الخادم عن كل التغييرات: " + error.message); }
+    localStorage.removeItem(LIVE_CACHE_KEY);
+    return data;
+  },
+
   async restoreBackup(backup) {
     if (!backup || typeof backup !== "object" || !backup.tables) throw new Error("النسخة لا تحتوي بيانات صالحة.");
     if (!isSupabaseConfigured) {
@@ -1305,11 +1503,7 @@ export const dataService = {
     }
     if (!["zakat-backup-v1", "zakat-backup-v2"].includes(backup.format)) throw new Error("صيغة النسخة غير مدعومة.");
     if (backup.format === "zakat-backup-v2" && !backup.checksum) throw new Error("نسخة V2 لا تحتوي بصمة تحقق.");
-    const confirmation = backup.format === "zakat-backup-v1" ? "LEGACY-V1-RESTORE" : String(backup.checksum).slice(0, 12);
-    const { data, error } = await supabase.rpc("restore_application_backup", { p_backup: backup, p_confirmation: confirmation });
-    if (error) throw new Error(`فشلت الاستعادة وتم التراجع عن كل التغييرات: ${error.message}`);
-    localStorage.removeItem(LIVE_CACHE_KEY);
-    return data;
+    throw new Error("تم إيقاف الاستعادة ذات الطلب الواحد. استخدم معالج النسخ V3 لتحويل نسخة V1/V2 ورفعها على أجزاء آمنة.");
   },
 
   async createApplicationBackup() {
@@ -1319,7 +1513,7 @@ export const dataService = {
       const checksum = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
       return {
         format: "zakat-backup-v2",
-        version: config.version || "12.0.0",
+        version: config.version || "12.2.0",
         exported_at: new Date().toISOString(),
         mode: "demo-replace",
         tables,
@@ -1327,9 +1521,7 @@ export const dataService = {
         checksum
       };
     }
-    const { data, error } = await supabase.rpc("create_application_backup");
-    if (error) throw new Error(`تعذر إنشاء النسخة الاحتياطية: ${error.message}`);
-    return data;
+    throw new Error("تم إيقاف إنشاء نسخة V2 ذات الطلب الواحد. استخدم النسخ الاحتياطي V3 من الإعدادات.");
   },
 
   async exportAllTables() {

@@ -5,6 +5,8 @@ import { isOnline, checkConnectivity, subscribeConnection } from "./connectivity
 import { importDefinitions, downloadImportTemplate, parseImportFile } from "./import-service.js";
 import { roleDailyGuides, userGuideSections } from "./user-guide.js";
 import { renderAssistantScreen, handleAssistantInteraction } from "./ai-assistant.js";
+import { createV3Archive, inspectV3Archive, normalizeLegacyBackup, downloadV3Archive } from "./backup-v3.js";
+import { validateCashboxUserAssignment } from "./state-machines.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -45,6 +47,11 @@ const routeMap = {
   "campaign-in-kind-funding": "campaign_in_kind_funding",
   baskets: "baskets",
   "in-kind-payments": "in_kind_payments",
+  "wallet-providers": "wallet_providers",
+  "bulk-disbursements": "bulk_disbursements",
+  "disbursement-results": "disbursement_results",
+  messages: "messages",
+  "message-templates": "message_templates",
   closings: "account_closings",
   reports: null,
   audit: "audit_logs",
@@ -82,6 +89,11 @@ const configKeyMap = {
   campaign_in_kind_funding: "campaign_in_kind_funding",
   baskets: "baskets",
   in_kind_payments: "in_kind_payments",
+  wallet_providers: "wallet_providers",
+  bulk_disbursements: "bulk_disbursements",
+  disbursement_results: "disbursement_results",
+  messages: "messages",
+  message_templates: "message_templates",
   account_closings: "closings",
   audit_logs: "audit_logs"
 };
@@ -96,6 +108,42 @@ const roleAccess = {
   auditor: ["ai-assistant", "cashboxes", "stock-balances", "login-attempts", "user-tracking", "dashboard", "reports", "audit"]
 };
 
+const tableCreateRoles = {
+  profiles: ["admin"], branches: ["admin", "supervisor"], delegates: ["admin", "supervisor", "accountant"],
+  donors: ["admin", "supervisor", "accountant", "data_entry"], beneficiary_categories: ["admin", "supervisor"],
+  health_conditions: ["admin", "supervisor"], beneficiaries: ["admin", "supervisor", "data_entry", "distributor"],
+  units: ["admin", "supervisor", "warehouse"], items: ["admin", "supervisor", "warehouse"], warehouses: ["admin", "supervisor", "warehouse"],
+  cashboxes: ["admin", "supervisor", "accountant"], campaigns: ["admin", "supervisor", "accountant"],
+  campaign_funding: ["admin", "supervisor", "accountant"], campaign_distributors: ["admin", "supervisor", "accountant"],
+  cashbox_users: ["admin", "supervisor", "accountant"], cash_receipts: ["admin", "supervisor", "accountant"],
+  cash_payments: ["admin", "supervisor", "accountant", "distributor"], cash_transfers: ["admin", "supervisor", "accountant"],
+  distribution_assignments: ["admin", "supervisor", "accountant", "distributor"],
+  in_kind_receipts: ["admin", "supervisor", "accountant", "warehouse"], campaign_in_kind_funding: ["admin", "supervisor", "warehouse"],
+  baskets: ["admin", "supervisor", "warehouse"], in_kind_payments: ["admin", "supervisor", "warehouse", "distributor"],
+  wallet_providers: ["admin", "supervisor", "accountant"], bulk_disbursements: ["admin", "supervisor", "accountant"],
+  disbursement_results: ["admin", "supervisor", "accountant"], messages: ["admin", "supervisor", "data_entry", "distributor"],
+  message_templates: ["admin", "supervisor"], import_jobs: ["admin", "supervisor", "data_entry"],
+  account_closings: ["admin", "supervisor", "accountant"]
+};
+
+const tableUpdateRoles = {
+  ...tableCreateRoles,
+  beneficiaries: ["admin", "supervisor", "data_entry"],
+  distribution_assignments: [], import_jobs: [], authorized_devices: ["admin"]
+};
+
+const mutatingRowActions = new Set(["edit", "toggle", "reset-password", "approve", "open-close", "post", "cancel", "confirm-receipt", "settle", "reopen", "retry"]);
+
+function roleCanWrite(table, mode = "update") {
+  const role = state.session?.profile?.role || "data_entry";
+  const roles = (mode === "create" ? tableCreateRoles : tableUpdateRoles)[table] || [];
+  if (!roles.includes(role)) return false;
+  if (table === "beneficiaries" && mode === "create" && role === "distributor") {
+    return state.session?.profile?.can_create_beneficiaries === true;
+  }
+  return true;
+}
+
 const state = {
   session: null,
   currentScreen: "dashboard",
@@ -105,6 +153,16 @@ const state = {
   charts: [],
   currentRows: [],
   currentConfig: null
+};
+
+const backupUiState = {
+  inspection: null,
+  restoreSession: null,
+  restoreMode: "merge",
+  stagedParts: new Set(),
+  preflight: null,
+  busy: false,
+  lastMessage: "اختر نطاق النسخة أو ملف الاستعادة للبدء."
 };
 
 const els = {
@@ -161,7 +219,7 @@ function showApp() {
   document.getElementById("sidebar-avatar").textContent = initials(displayName);
   document.getElementById("top-avatar").textContent = initials(displayName);
   const version = document.getElementById("sidebar-version");
-  if (version) version.textContent = `الإصدار ${config.version || "12.0.0"}`;
+  if (version) version.textContent = `الإصدار ${config.version || "12.2.0"}`;
   buildNavigation();
   updateConnectionStatus();
   updateQueueBadge();
@@ -251,6 +309,9 @@ async function renderDashboard() {
   const openCampaigns = campaigns.data.filter(x => x.status === "open").length;
   const profile = state.session.profile || {};
   const firstName = profile.full_name?.split(" ")[0] || "بك";
+  const canAddBeneficiary = roleCanWrite("beneficiaries", "create");
+  const canQuickDeliver = roleCanWrite("distribution_assignments", "create");
+  const canAddInKindReceipt = roleCanWrite("in_kind_receipts", "create");
 
   const recent = [...receipts.data.map(x => ({ ...x, kind: "قبض نقدي", amountText: formatCurrency(x.amount, x.currency), person: x.donor_name, icon: "fa-arrow-down", color: "green" })),
     ...payments.data.map(x => ({ ...x, kind: "صرف نقدي", amountText: formatCurrency(x.amount, x.currency), person: x.beneficiary_name, icon: "fa-arrow-up", color: "blue" }))]
@@ -263,7 +324,7 @@ async function renderDashboard() {
   els.pageContent.innerHTML = `
     <section class="welcome-banner">
       <div class="welcome-copy"><span>لوحة المتابعة اليومية</span><h2>مرحباً ${escapeHtml(firstName)}، العمل يسير بصورة جيدة.</h2><p>آخر تحديث: ${formatDate(new Date().toISOString(), true)} • ${dataService.demoMode ? "بيانات تجريبية محلية" : "متصل بقاعدة Supabase"}</p></div>
-      <div class="welcome-actions"><button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button><button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button></div>
+      <div class="welcome-actions">${canQuickDeliver ? `<button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button>` : ""}${canAddBeneficiary ? `<button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button>` : ""}</div>
     </section>
     <section class="metrics-grid">
       ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", formatNumber(activeBeneficiaries), `${beneficiaries.total} ملف مسجل`, "beneficiaries")}
@@ -284,9 +345,9 @@ async function renderDashboard() {
     <section class="dashboard-grid equal">
       <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-clock-rotate-left"></i></span><div><h3>آخر العمليات</h3><p>أحدث سندات القبض والصرف</p></div></div><button class="ghost-button" data-nav="audit">عرض السجل</button></header><div class="table-scroll"><table class="data-table" style="min-width:620px"><thead><tr><th>العملية</th><th>الطرف</th><th>الحملة</th><th>القيمة</th><th>الحالة</th></tr></thead><tbody>${recent.map(x => `<tr><td><div class="cell-title"><span class="cell-avatar"><i class="fa-solid ${x.icon}"></i></span><div><strong>${escapeHtml(x.kind)}</strong><small>${formatDate(x.receipt_date || x.payment_date)}</small></div></div></td><td>${escapeHtml(x.person || "-")}</td><td>${escapeHtml(x.campaign_name || "-")}</td><td><strong>${x.amountText}</strong></td><td>${statusBadge(x.status)}</td></tr>`).join("")}</tbody></table></div></article>
       <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bolt"></i></span><div><h3>إجراءات سريعة</h3><p>ابدأ أكثر العمليات استخداماً</p></div></div></header><div class="panel-body"><div class="quick-actions-grid">
-        <button class="quick-action-card" data-quick-delivery><i class="fa-solid fa-bolt"></i><span>تسليم سريع لمستفيد</span></button>
-        <button class="quick-action-card" data-quick-add="cash_payments"><i class="fa-solid fa-hand-holding-dollar"></i><span>سند صرف نقدي</span></button>
-        <button class="quick-action-card" data-quick-add="in_kind_receipts"><i class="fa-solid fa-truck-ramp-box"></i><span>قبض عيني</span></button>
+        ${canQuickDeliver ? `<button class="quick-action-card" data-quick-delivery><i class="fa-solid fa-bolt"></i><span>تسليم سريع لمستفيد</span></button>` : ""}
+        ${roleCanWrite("cash_payments", "create") ? `<button class="quick-action-card" data-quick-add="cash_payments"><i class="fa-solid fa-hand-holding-dollar"></i><span>سند صرف نقدي</span></button>` : ""}
+        ${canAddInKindReceipt ? `<button class="quick-action-card" data-quick-add="in_kind_receipts"><i class="fa-solid fa-truck-ramp-box"></i><span>قبض عيني</span></button>` : ""}
         <button class="quick-action-card" data-quick-add="in_kind_payments"><i class="fa-solid fa-box-open"></i><span>صرف عيني</span></button>
       </div></div></article>
     </section>`;
@@ -320,10 +381,8 @@ async function renderClassifications() {
 }
 
 function renderToolbar(cfg, prependToolbar = "") {
-  const profile = state.session?.profile || {};
-  const distributorBeneficiaries = cfg.table === "beneficiaries" && profile.role === "distributor";
-  const canAdd = !distributorBeneficiaries || profile.can_create_beneficiaries === true;
-  const canImport = cfg.importable && !distributorBeneficiaries;
+  const canAdd = roleCanWrite(cfg.table, "create");
+  const canImport = cfg.importable && canAdd;
   return `<section class="page-toolbar"><div><div class="page-description">${escapeHtml(cfg.description || "")}</div>${prependToolbar ? `<div style="margin-top:12px">${prependToolbar}</div>` : ""}</div><div class="toolbar-actions">
     ${canImport ? `<button class="ghost-button" data-download-import-template="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-arrow-down"></i> نموذج Excel</button><button class="ghost-button" data-open-import="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-import"></i> استيراد</button>` : ""}
     <button class="ghost-button" data-export-current><i class="fa-solid fa-file-export"></i> تصدير</button>
@@ -407,6 +466,9 @@ const actionMeta = {
 function availableActions(cfg, row) {
   const role = state.session?.profile?.role;
   return (cfg.actions || []).filter(action => {
+    if (action === "copy" && !roleCanWrite(cfg.table, "create")) return false;
+    if (mutatingRowActions.has(action) && !roleCanWrite(cfg.table, "update")) return false;
+    if (action === "retry" && !["admin", "supervisor", "accountant"].includes(role)) return false;
     if (role === "distributor" && cfg.table === "beneficiaries" && ["edit", "approve", "toggle"].includes(action)) return false;
     if (action === "edit" && ["posted", "cancelled", "closed"].includes(row.status)) return false;
     if (action === "edit" && cfg.table === "campaign_distributors" && row.status === "settled") return false;
@@ -453,8 +515,10 @@ async function loadRelationOptions(field) {
 async function openRecordForm(cfg, record = null, copyMode = false) {
   const role = state.session?.profile?.role || "data_entry";
   const profile = state.session?.profile || {};
+  const mode = record && !copyMode ? "update" : "create";
+  if (!roleCanWrite(cfg.table, mode)) return toast("لا يملك دورك الحالي صلاحية حفظ هذا النوع من السجلات.", "error");
   if (!record && cfg.table === "beneficiaries" && role === "distributor" && profile.can_create_beneficiaries !== true) {
-    throw new Error("لم يمنحك مدير النظام صلاحية إضافة مستفيدين جدد.");
+    return toast("لم يمنحك مدير النظام صلاحية إضافة مستفيدين جدد.", "error");
   }
   const activeFields = cfg.fields.filter(field => (!field.adminOnly || role === "admin") && !(cfg.table === "beneficiaries" && role === "distributor" && field.key === "status"));
   const relationFields = activeFields.filter(f => ["relation", "autocompleteRelation"].includes(f.type));
@@ -645,6 +709,9 @@ async function preparePayloadForSave(cfg, payload, relationMap) {
     if (!approved) throw new Error("أُلغي الحفظ لتعديل تاريخ السند.");
   }
   if (cfg.table === "delegates" && !payload.profile_id && !payload.phone) throw new Error("أدخل رقم الهاتف أو اربط الموزع بحساب مستخدم.");
+  if (cfg.table === "cashbox_users") {
+    Object.assign(payload, validateCashboxUserAssignment(payload));
+  }
   if (cfg.table === "beneficiaries" && state.session?.profile?.role === "distributor") {
     if (!state.session.profile.can_create_beneficiaries) throw new Error("لم يمنحك مدير النظام صلاحية إضافة مستفيدين جدد.");
     if (!state.session.profile.delegate_id) throw new Error("حسابك غير مربوط بسجل موزع نشط.");
@@ -1001,6 +1068,209 @@ async function renderGuide() {
   }));
 }
 
+function backupPreflightMarkup() {
+  const report = backupUiState.preflight;
+  if (!report) return '<div class="backup-preflight empty"><i class="fa-solid fa-clipboard-check"></i><div><strong>لم تبدأ المعاينة بعد</strong><span>ارفع الملف على أجزاء ثم راجع النتيجة قبل ظهور زر التنفيذ.</span></div></div>';
+  const issues = Array.isArray(report.issues) ? report.issues : [];
+  const warnings = Array.isArray(report.warnings) ? report.warnings : [];
+  const tableRows = Object.entries(report.tables || {}).map(([table, value]) => {
+    return '<li><strong>' + escapeHtml(table) + '</strong><span>' +
+      formatNumber(value.received_rows || 0) + ' / ' + formatNumber(value.expected_rows || 0) +
+      ' صف — ' + formatNumber(value.received_parts || 0) + ' / ' + formatNumber(value.expected_parts || 0) + ' جزء</span></li>';
+  }).join("");
+  const issueRows = issues.map(issue => '<li><i class="fa-solid fa-triangle-exclamation"></i>' + escapeHtml(issue.message || "ملاحظة فحص") + '</li>').join("");
+  const warningRows = warnings.map(warning => '<li><i class="fa-solid fa-circle-exclamation"></i>' + escapeHtml(warning.message || "تنبيه يحتاج المراجعة") + '</li>').join("");
+  const canCommit = report.ok === true && backupUiState.restoreSession;
+  return [
+    '<section class="backup-preflight ' + (report.ok ? 'ok' : 'failed') + '">',
+    '<header><div><span class="eyebrow">المعاينة قبل التنفيذ</span><h4>' + (report.ok ? 'الفحص ناجح ويمكنك التأكيد' : 'الفحص وجد ملاحظات ويمنع التنفيذ') + '</h4></div>',
+    '<span class="status-badge ' + (report.ok ? 'active' : 'cancelled') + '">' + (report.ok ? 'جاهز للمراجعة' : 'غير جاهز') + '</span></header>',
+    '<p>المعاينة لا تغيّر سجلات النظام. عند التنفيذ يعيد الخادم فحص الصلاحية والجهاز والعلاقات والتكامل المالي داخل معاملة واحدة.</p>',
+    tableRows ? '<ul class="backup-table-summary">' + tableRows + '</ul>' : '',
+    warningRows ? '<ul class="backup-warnings">' + warningRows + '</ul>' : '',
+    issueRows ? '<ul class="backup-issues">' + issueRows + '</ul>' : '',
+    canCommit ? '<div class="backup-confirm-row"><button class="' + (backupUiState.restoreMode === 'exact' ? 'danger-button' : 'primary-button') + '" data-backup-v3-commit><i class="fa-solid fa-shield-check"></i> ' + (backupUiState.restoreMode === 'exact' ? 'تأكيد المطابقة EXACT-RESTORE' : 'تأكيد الدمج الآمن') + '</button></div>' : '',
+    '</section>'
+  ].join("");
+}
+
+function renderBackupPanel() {
+  const inspection = backupUiState.inspection;
+  const restoreInfo = inspection
+    ? '<div class="backup-file-summary"><i class="fa-solid fa-file-shield"></i><span>الملف المفحوص: ' + formatNumber(inspection.totalRows || 0) + ' صف و' + formatNumber(inspection.parts?.length || 0) + ' جزء' + (inspection.legacy ? (inspection.manifest.legacy_source_format === 'zakat-backup-v2' ? ' — V2 محولة وستُطابق بصمتها على الخادم' : ' — V1 قديمة غير موقعة وستظهر كتحذير') : '') + '</span><button class="ghost-button small-button" data-backup-v3-clear aria-label="إزالة الملف المفحوص"><i class="fa-solid fa-xmark"></i></button></div>'
+    : '<p class="muted">يمكن قبول ZIP بصيغة V3 أو نسخة JSON قديمة V1/V2 ليحوّلها النظام إلى أجزاء آمنة قبل الرفع.</p>';
+  const resumeButton = backupUiState.restoreSession && !backupUiState.preflight?.ok
+    ? '<button class="secondary-button" data-backup-v3-resume><i class="fa-solid fa-rotate"></i> متابعة من آخر جزء</button>'
+    : '';
+  return [
+    '<section class="backup-v3-shell" data-backup-v3-shell>',
+    '<header class="backup-v3-header"><div><span class="eyebrow">النسخ الاحتياطي V3</span><h3>نسخ متحقق واستعادة مرحلية</h3><p>لا ينتقل النظام كله في طلب واحد؛ كل جزء يتحقق منه ثم يمكن متابعة الجزء الذي انقطع فقط.</p></div><span class="status-badge active"><i class="fa-solid fa-shield-halved"></i> مدير وجهاز معتمد</span></header>',
+    '<div id="backup-v3-status" class="backup-v3-status" aria-live="polite" role="status">' + escapeHtml(backupUiState.lastMessage) + '</div>',
+    '<div class="backup-v3-grid">',
+    '<article class="backup-step-card"><header><span class="backup-step-number">1</span><div><h4>إنشاء نسخة</h4><p>فحص الحسابات، قراءة أجزاء قصيرة، ثم ZIP مع بصمة لكل جزء.</p></div></header>',
+    '<div class="form-field"><label>نطاق النسخة</label><select id="backup-v3-scope" class="form-control"><option value="business">بيانات الأعمال (موصى بها)</option><option value="administrative">نسخة إدارية كاملة</option></select></div>',
+    '<label class="backup-check"><input id="backup-v3-consistent" type="checkbox"><span>نسخة متسقة مع إيقاف التعديل مؤقتاً</span><small>يمنع الكتابة فقط حتى تنتهي الجلسة أو تنتهي مهلة الحماية تلقائياً.</small></label>',
+    '<button class="primary-button" data-backup-v3-create><i class="fa-solid fa-download"></i> إنشاء وتنزيل نسخة V3</button>',
+    '</article>',
+    '<article class="backup-step-card"><header><span class="backup-step-number">2</span><div><h4>فحص ورفع الاستعادة</h4><p>يُفحص الملف محلياً قبل الاتصال، ثم تُرفع أجزاؤه مع قابلية الاستئناف.</p></div></header>',
+    '<div class="form-field"><label for="backup-v3-file">ملف النسخة</label><input id="backup-v3-file" class="form-control" type="file" accept=".zip,.json,application/zip,application/json"></div>',
+    '<div class="form-field"><label for="backup-v3-mode">طريقة الاستعادة</label><select id="backup-v3-mode" class="form-control"><option value="merge">الدمج الآمن (افتراضي)</option><option value="exact">المطابقة EXACT-RESTORE (يحذف زيادات البيانات المُدارة)</option></select></div>',
+    restoreInfo,
+    '<div class="backup-action-row"><button class="secondary-button" data-backup-v3-restore><i class="fa-solid fa-file-circle-check"></i> فحص الملف ورفع الأجزاء</button>' + resumeButton + '</div>',
+    '</article>',
+    '</div>',
+    backupPreflightMarkup(),
+    '<aside class="backup-scope-note"><i class="fa-solid fa-circle-info"></i><div><strong>حدود النسخة V3</strong><p>تشمل بيانات التطبيق وسجلاته القابلة للاستعادة. لا تشمل كلمة المرور أو أسرار Gemini أو ملف Supabase Storage الثنائي أو إعدادات Edge Functions. احتفظ أيضاً بنسخة منصة Supabase مستقلة للمشروع الكامل.</p></div></aside>',
+    '</section>'
+  ].join("");
+}
+
+function setBackupStatus(message, tone = "info") {
+  backupUiState.lastMessage = String(message || "");
+  const status = document.getElementById("backup-v3-status");
+  if (status) {
+    status.textContent = backupUiState.lastMessage;
+    status.dataset.tone = tone;
+  }
+}
+
+function backupProgressMessage(progress) {
+  if (!progress) return "جاري تجهيز العملية...";
+  if (progress.phase === "export") return "قراءة " + progress.table + " — الجزء " + progress.partNo + " — " + formatNumber(progress.rows || 0) + " صف.";
+  if (progress.phase === "compress") return "تمت قراءة " + formatNumber(progress.rows || 0) + " صف. " + progress.message;
+  return progress.message || "جاري المعالجة...";
+}
+
+async function runBackupV3Wizard() {
+  if (backupUiState.busy) return;
+  const scope = document.getElementById("backup-v3-scope")?.value || "business";
+  const consistent = Boolean(document.getElementById("backup-v3-consistent")?.checked);
+  backupUiState.busy = true;
+  setBackupStatus("يتم فحص الصلاحية والتكامل المالي قبل بدء القراءة...", "info");
+  const button = document.querySelector("[data-backup-v3-create]");
+  if (button) button.disabled = true;
+  try {
+    const result = await createV3Archive(dataService, {
+      scope,
+      consistent,
+      onProgress: progress => setBackupStatus(backupProgressMessage(progress), "info")
+    });
+    downloadV3Archive(result);
+    setBackupStatus("اكتملت النسخة: " + formatNumber(result.totalRows) + " صف و" + formatNumber(result.totalParts) + " جزء. تم بدء تنزيل ZIP بعد تحقق البصمات.", "success");
+    toast("اكتملت النسخة الاحتياطية V3 وتم التحقق منها.");
+  } catch (error) {
+    setBackupStatus(error.message || "تعذر إنشاء النسخة.", "error");
+    toast(error.message || "تعذر إنشاء النسخة.", "error");
+  } finally {
+    backupUiState.busy = false;
+    if (button) button.disabled = false;
+  }
+}
+
+async function inspectBackupInput(file) {
+  if (!file) throw new Error("اختر ملف نسخة ZIP أو JSON أولاً.");
+  let inspection;
+  if (file.name.toLowerCase().endsWith(".zip")) {
+    inspection = await inspectV3Archive(file);
+  } else {
+    let legacy;
+    try { legacy = JSON.parse(await file.text()); } catch { throw new Error("ملف JSON لا يمكن قراءته."); }
+    inspection = await normalizeLegacyBackup(legacy);
+  }
+  backupUiState.inspection = inspection;
+  backupUiState.restoreSession = null;
+  backupUiState.stagedParts = new Set();
+  backupUiState.preflight = null;
+  backupUiState.lastMessage = "تم فحص الملف محلياً بنجاح: " + formatNumber(inspection.totalRows || 0) + " صف.";
+  return inspection;
+}
+
+async function runRestoreV3Wizard() {
+  if (backupUiState.busy) return;
+  const input = document.getElementById("backup-v3-file");
+  const mode = document.getElementById("backup-v3-mode")?.value || "merge";
+  backupUiState.busy = true;
+  try {
+    let inspection = backupUiState.inspection;
+    if (!inspection && input?.files?.[0]) {
+      setBackupStatus("يتم فحص manifest وبصمات جميع الأجزاء محلياً...", "info");
+      inspection = await inspectBackupInput(input.files[0]);
+    }
+    if (!inspection) throw new Error("اختر ملف النسخة أولاً.");
+    if (backupUiState.restoreSession && backupUiState.restoreMode !== mode) {
+      backupUiState.restoreSession = null;
+      backupUiState.stagedParts = new Set();
+      backupUiState.preflight = null;
+    }
+    backupUiState.restoreMode = mode;
+    if (!backupUiState.restoreSession) {
+      setBackupStatus("يتم إنشاء جلسة استعادة محمية على الخادم...", "info");
+      backupUiState.restoreSession = await dataService.startRestoreV3(inspection.manifest, mode);
+    }
+    const sessionId = backupUiState.restoreSession.session_id;
+    const parts = [...inspection.parts].sort((left, right) => left.table.localeCompare(right.table) || left.partNo - right.partNo);
+    for (let index = 0; index < parts.length; index += 1) {
+      const part = parts[index];
+      const key = part.table + ":" + part.partNo;
+      if (backupUiState.stagedParts.has(key)) continue;
+      setBackupStatus("رفع " + part.table + " — الجزء " + part.partNo + " من " + parts.length + "...", "info");
+      await dataService.stageRestoreV3Part(sessionId, part.table, part.partNo, part.rowsText, part.checksum);
+      backupUiState.stagedParts.add(key);
+    }
+    setBackupStatus("اكتمل رفع الأجزاء. يجري الخادم الآن المعاينة دون تغيير البيانات...", "info");
+    backupUiState.preflight = await dataService.preflightRestoreV3(sessionId);
+    await renderSettings("backup");
+    setBackupStatus(backupUiState.preflight.ok ? "المعاينة ناجحة. راجع الملخص ثم أكد العملية." : "المعاينة اكتملت مع ملاحظات؛ لن يسمح النظام بالتنفيذ حتى تُحل.", backupUiState.preflight.ok ? "success" : "error");
+  } catch (error) {
+    setBackupStatus(error.message || "تعذر فحص أو رفع النسخة.", "error");
+    toast(error.message || "تعذر فحص أو رفع النسخة.", "error");
+  } finally {
+    backupUiState.busy = false;
+  }
+}
+
+async function commitRestoreV3Wizard() {
+  if (backupUiState.busy || !backupUiState.restoreSession || !backupUiState.preflight?.ok) return;
+  const exact = backupUiState.restoreMode === "exact";
+  const approved = await confirmDialog(
+    exact
+      ? "الاستعادة المطابقة ستزيل الزيادات من جداول بيانات الأعمال المُدارة. النظام لا يحذف ملفات المستخدمين أو حسابات Auth، ويحمي جهازك الحالي. ستُغلق الجلسات والإجراءات القديمة المستعادة. هل تريد المتابعة؟"
+      : "سيُدمج النظام البيانات الجديدة ويحدّث السجلات المطابقة فقط. يعيد الخادم التحقق مرة أخيرة قبل اعتماد أي تغيير. هل تريد المتابعة؟",
+    exact ? "تأكيد استعادة مطابقة" : "تأكيد دمج آمن",
+    exact ? "متابعة إلى عبارة التأكيد" : "تنفيذ الدمج",
+    exact
+  );
+  if (!approved) return;
+  let confirmation = "MERGE-RESTORE";
+  if (exact) {
+    confirmation = window.prompt("اكتب EXACT-RESTORE بالحروف الإنجليزية لتأكيد الاستعادة المطابقة:", "") || "";
+    if (confirmation !== "EXACT-RESTORE") return toast("لم تُكتب عبارة التأكيد الصحيحة؛ لم يتغير أي سجل.", "warning");
+  }
+  backupUiState.busy = true;
+  setBackupStatus("يتم تنفيذ الاستعادة داخل معاملة واحدة. لا تغلق الصفحة حتى تظهر النتيجة.", "info");
+  try {
+    const result = await dataService.commitRestoreV3(backupUiState.restoreSession.session_id, confirmation);
+    backupUiState.lastMessage = "نجحت الاستعادة: " + formatNumber(result.restored_rows || 0) + " صف. تم تسجيل تقرير العملية في التدقيق.";
+    backupUiState.inspection = null;
+    backupUiState.restoreSession = null;
+    backupUiState.stagedParts = new Set();
+    backupUiState.preflight = null;
+    await renderSettings("backup");
+    toast("تمت الاستعادة بنجاح وفُحص التكامل المالي.");
+  } catch (error) {
+    const message = (error.message || "فشلت الاستعادة وتراجع الخادم عن العملية.") + " ابدأ جلسة استعادة جديدة من الملف المفحوص.";
+    backupUiState.restoreSession = null;
+    backupUiState.stagedParts = new Set();
+    backupUiState.preflight = null;
+    backupUiState.lastMessage = message;
+    await renderSettings("backup");
+    setBackupStatus(message, "error");
+    toast(message, "error");
+  } finally {
+    backupUiState.busy = false;
+  }
+}
+
 async function renderSettings(tab = "general") {
   const settingsResult = await dataService.list("system_settings", { pageSize: 1 });
   const s = settingsResult.data[0] || {};
@@ -1012,8 +1282,8 @@ async function renderSettings(tab = "general") {
   if (tab === "general") panel = `<h3>الإعدادات العامة</h3><p>هوية النظام والعملات وصيغة أرقام السندات.</p><form id="settings-form" class="form-grid"><div class="form-field"><label>اسم الجهة</label><input class="form-control" name="organization_name" value="${escapeHtml(s.organization_name || "")}"></div><div class="form-field"><label>اسم النظام</label><input class="form-control" name="system_name" value="${escapeHtml(s.system_name || "")}"></div><div class="form-field"><label>العملة الافتراضية</label><select class="form-control" name="currency"><option value="YER" ${s.currency === "YER" ? "selected" : ""}>ريال يمني</option><option value="SAR" ${s.currency === "SAR" ? "selected" : ""}>ريال سعودي</option><option value="USD" ${s.currency === "USD" ? "selected" : ""}>دولار أمريكي</option></select></div><div class="form-field"><label>سنوات الاحتفاظ بالبيانات</label><input class="form-control" type="number" name="retention_years" value="${s.retention_years || 10}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>`;
   else if (tab === "policies") panel = `<h3>سياسات العمل والتحقق</h3><p>يمكن تغيير هذه الخيارات دون تعديل الكود.</p><form id="settings-form" class="form-grid"><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الصرف يحتاج اعتماداً</strong><small>تُحفظ سندات الموزعين تحت المراجعة قبل الترحيل.</small></div><label class="switch"><input name="require_payment_approval" type="checkbox" ${s.require_payment_approval ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل التلقائي لكل العمليات</strong><small>بعد الحفظ يتم الترحيل عند وجود اتصال وبعد فحص الرصيد والصلاحيات؛ المسودة غير المتصلة تُزامن أولاً ثم تنتظر الترحيل الآمن.</small></div><label class="switch"><input name="auto_post_all_operations" type="checkbox" ${s.auto_post_all_operations ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالمسودات دون اتصال</strong><small>يحفظ النظام المسودة محلياً ويرسلها عند عودة الشبكة.</small></div><label class="switch"><input name="allow_offline_drafts" type="checkbox" ${s.allow_offline_drafts ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل النهائي دون اتصال</strong><small>غير متاح أمنياً؛ يجب أن يعيد الخادم فحص الرصيد والتكرار لحظة الترحيل.</small></div><label class="switch"><input name="allow_final_offline" type="checkbox" disabled><span class="switch-slider"></span></label></div></div><div class="form-field"><label>طريقة الترحيل والمزامنة</label><select class="form-control" name="sync_mode"><option value="automatic" ${s.sync_mode !== "manual" ? "selected" : ""}>تلقائية عند عودة الإنترنت</option><option value="manual" ${s.sync_mode === "manual" ? "selected" : ""}>يدوية من شاشة المزامنة</option></select></div><div class="form-field"><label>عدد محاولات الدخول</label><input class="form-control" name="max_login_attempts" type="number" min="1" max="20" value="${s.max_login_attempts || 5}"></div><div class="form-field"><label>مدة الإيقاف المؤقت بالدقائق</label><input class="form-control" name="lockout_minutes" type="number" min="1" max="1440" value="${s.lockout_minutes || 15}"></div><div class="form-field"><label>تنبيه الصلاحية قبل</label><input class="form-control" name="stock_alert_days" type="number" value="${s.stock_alert_days || 30}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ السياسات</button></div>`;
   else if (tab === "printing") panel = `<h3>إعدادات الطباعة</h3><p>تخصيص النصوص التي تظهر في السندات والتقارير.</p><form id="settings-form" class="form-grid"><div class="form-field full"><label>تذييل الطباعة</label><textarea class="form-control" name="print_footer">${escapeHtml(s.print_footer || "")}</textarea></div></form><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="ghost-button" onclick="window.print()"><i class="fa-solid fa-print"></i> اختبار الطباعة</button><button class="primary-button" data-save-settings>حفظ</button></div>`;
-  else if (tab === "backup") panel = `<h3>النسخ الاحتياطي والاستعادة</h3><p>نسخة أعمال موقعة بالبصمة، واستعادة ذرّية تعمل على Supabase الحي. النسخة الكاملة للمشروع (Auth وStorage وإعدادات Edge Functions) تُدار من لوحة Supabase أو CLI.</p><div class="detail-grid"><div class="detail-item full"><span>إنشاء نسخة</span><strong>ZIP يحوي JSON موقعاً وCSV لكل جدول أعمال</strong><button class="secondary-button" data-download-backup style="margin-top:10px"><i class="fa-solid fa-download"></i> تنزيل النسخة</button></div><div class="detail-item full"><span>استعادة آمنة</span><strong>دمج ذرّي مع فحص البصمة والتكامل المالي قبل اعتماد النتيجة</strong><input id="restore-backup-file" class="form-control" type="file" accept=".zip,.json" style="margin-top:10px"><button class="secondary-button" data-restore-backup style="margin-top:10px"><i class="fa-solid fa-upload"></i> فحص واستعادة النسخة</button></div>${dataService.demoMode ? `<div class="detail-item full"><span>إعادة بيانات العرض الأصلية</span><button class="danger-button" data-reset-demo style="margin-top:10px"><i class="fa-solid fa-rotate-left"></i> إعادة الضبط</button></div>` : ""}</div>`;
-  else panel = `<h3>حالة النظام</h3><p>صفحة تشخيص توضح بيئة التشغيل والاتصال والمزامنة والإصدار؛ لا تغيّر البيانات.</p><div class="detail-grid"><div class="detail-item"><span>الإصدار</span><strong>${escapeHtml(config.version || "12.0.0")} — ${escapeHtml(config.releaseName || "")}</strong></div><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${isOnline() ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>عمليات تنتظر المزامنة</span><strong>${getOfflineQueue().filter(x => ["queued","failed"].includes(x.status)).length}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>مفتاح الواجهة anon/publishable فقط، والحماية الفعلية عبر RLS والدوال المقيدة.</strong></div></div>`;
+  else if (tab === "backup") panel = renderBackupPanel();
+  else panel = `<h3>حالة النظام</h3><p>صفحة تشخيص توضح بيئة التشغيل والاتصال والمزامنة والإصدار؛ لا تغيّر البيانات.</p><div class="detail-grid"><div class="detail-item"><span>الإصدار</span><strong>${escapeHtml(config.version || "12.2.0")} — ${escapeHtml(config.releaseName || "")}</strong></div><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${isOnline() ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>عمليات تنتظر المزامنة</span><strong>${getOfflineQueue().filter(x => ["queued","failed"].includes(x.status)).length}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>مفتاح الواجهة anon/publishable فقط، والحماية الفعلية عبر RLS والدوال المقيدة.</strong></div></div>`;
   els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">إدارة الخيارات العامة والنسخ الاحتياطي وفق صلاحية مدير النظام.</div></section><section class="settings-layout"><nav class="settings-nav">${nav.map(x => `<button class="${tab === x[0] ? "active" : ""}" data-settings-tab="${x[0]}"><i class="${x[1]}"></i>${x[2]}</button>`).join("")}</nav><article class="settings-panel">${panel}</article></section>`;
 }
 
@@ -1115,6 +1385,7 @@ async function openImportDialog(targetTable = "") {
 
 
 async function openQuickDelivery() {
+  if (!roleCanWrite("distribution_assignments", "create")) return toast("لا يملك دورك الحالي صلاحية تنفيذ التسليم السريع.", "error");
   const role = state.session?.profile?.role || "";
   const profileId = state.session?.profile?.id || null;
   const [beneficiaryResult, delegateResult] = await Promise.all([
@@ -1366,6 +1637,17 @@ async function handleGlobalClick(event) {
   const settingsTab = event.target.closest("[data-settings-tab]");
   if (settingsTab) return renderSettings(settingsTab.dataset.settingsTab);
   if (event.target.closest("[data-save-settings]")) { try { await saveSettings(); } catch (error) { toast(error.message, "error"); } return; }
+  if (event.target.closest("[data-backup-v3-create]")) { await runBackupV3Wizard(); return; }
+  if (event.target.closest("[data-backup-v3-restore]") || event.target.closest("[data-backup-v3-resume]")) { await runRestoreV3Wizard(); return; }
+  if (event.target.closest("[data-backup-v3-commit]")) { await commitRestoreV3Wizard(); return; }
+  if (event.target.closest("[data-backup-v3-clear]")) {
+    backupUiState.inspection = null;
+    backupUiState.restoreSession = null;
+    backupUiState.stagedParts = new Set();
+    backupUiState.preflight = null;
+    backupUiState.lastMessage = "تمت إزالة الملف من المعالج دون تغيير أي بيانات.";
+    return renderSettings("backup");
+  }
   if (event.target.closest("[data-download-backup]")) { try { await downloadAllTablesZip(); toast("تم تنزيل نسخة ZIP لجميع الجداول."); } catch (error) { toast(error.message || "تعذر إنشاء النسخة.", "error"); } return; }
   if (event.target.closest("[data-restore-backup]")) {
     const file = document.getElementById("restore-backup-file")?.files?.[0];
@@ -1390,6 +1672,12 @@ function bindEvents() {
     if (wasOffline && online) toast("عاد الاتصال الفعلي بالخادم.", "info");
   });
   window.addEventListener("zakat:queue-change", updateQueueBadge);
+  window.addEventListener("zakat:assistant-ui-command", event => {
+    const command = event.detail || {};
+    if (command.type === "navigate" && typeof command.screen_id === "string") {
+      navigate(command.screen_id);
+    }
+  });
   document.getElementById("menu-toggle").addEventListener("click", () => els.sidebar.classList.add("open"));
   document.getElementById("sidebar-close").addEventListener("click", () => els.sidebar.classList.remove("open"));
   document.getElementById("quick-search").addEventListener("click", openCommandPalette);

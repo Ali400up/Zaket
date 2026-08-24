@@ -4,6 +4,12 @@ const assistantState = {
   conversationId: null,
   messages: [],
   actions: [],
+  reports: [],
+  suggestions: [
+    "اشرح لي طريقة النسخ الاحتياطي والاستعادة",
+    "افتح شاشة سندات الصرف النقدي",
+    "أعطني تقرير أرصدة الصناديق"
+  ],
   loading: false,
   loaded: false
 };
@@ -27,6 +33,72 @@ function actionMarkup(action) {
   return `<article class="ai-action-card ${escapeHtml(action.status || "pending")}"><header><span><i class="fa-solid fa-shield-halved"></i> إجراء مقترح</span><span class="status-badge ${pending ? "under_review" : action.status === "completed" ? "active" : "suspended"}">${escapeHtml(statusText)}</span></header><strong>${escapeHtml(action.summary || action.action_type || "إجراء إداري")}</strong>${action.error ? `<p class="import-errors">${escapeHtml(action.error)}</p>` : ""}${pending ? `<div class="ai-action-buttons"><button class="danger-button" data-ai-cancel-action="${escapeHtml(action.id)}"><i class="fa-solid fa-xmark"></i> إلغاء</button><button class="primary-button" data-ai-confirm-action="${escapeHtml(action.id)}"><i class="fa-solid fa-check"></i> تأكيد التنفيذ</button></div>` : ""}</article>`;
 }
 
+function reportRows(report) {
+  if (Array.isArray(report?.rows)) return report.rows;
+  if (Array.isArray(report?.cash) || Array.isArray(report?.in_kind)) return [
+    ...(report.cash || []).map(row => ({ النوع: "نقدي", ...row })),
+    ...(report.in_kind || []).map(row => ({ النوع: "عيني", ...row }))
+  ];
+  if (Array.isArray(report?.checks)) return report.checks;
+  return [];
+}
+
+function formatReportPreview(report) {
+  const rows = reportRows(report).slice(0, 6);
+  if (!rows.length) return "لا توجد سجلات ضمن صلاحياتك الحالية.";
+  return rows.map((row, index) => {
+    const values = Object.entries(row || {}).filter(([key]) => key !== "id").slice(0, 5)
+      .map(([key, value]) => key + ": " + (typeof value === "object" ? JSON.stringify(value) : value)).join(" • ");
+    return String(index + 1) + ". " + values;
+  }).join("\n");
+}
+
+function emitUiCommands(commands) {
+  for (const command of commands || []) {
+    if (!command || typeof command !== "object") continue;
+    window.dispatchEvent(new CustomEvent("zakat:assistant-ui-command", { detail: command }));
+  }
+}
+
+function downloadAssistantReport(index) {
+  const report = assistantState.reports[index];
+  if (!report) return;
+  const blob = new Blob([JSON.stringify(report, null, 2)], { type: "application/json;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement("a");
+  link.href = url;
+  link.download = "zakat-assistant-" + (report.report || "report") + ".json";
+  document.body.appendChild(link);
+  link.click();
+  link.remove();
+  URL.revokeObjectURL(url);
+  toast("تم تنزيل بيانات التقرير المعروضة.");
+}
+
+function renderAssistantExtras(root) {
+  const promptRoot = root.querySelector(".ai-quick-prompts");
+  for (const suggestion of assistantState.suggestions || []) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.setAttribute("data-ai-suggestion", suggestion);
+    button.className = "ai-suggestion";
+    button.textContent = suggestion;
+    promptRoot?.appendChild(button);
+  }
+  const safety = root.querySelector(".ai-safety-note span");
+  if (safety) safety.append(document.createTextNode(" لا ينفذ المساعد التغيير دون تأكيد مستقل منك."));
+  const log = root.querySelector("#ai-chat-log");
+  (assistantState.reports || []).forEach((report, index) => {
+    const card = document.createElement("article");
+    card.className = "ai-report-card";
+    card.innerHTML = '<header><span><i class="fa-solid fa-chart-column"></i> تقرير جاهز</span><button class="ghost-button" type="button"><i class="fa-solid fa-download"></i> تنزيل البيانات</button></header><strong></strong><pre></pre>';
+    card.querySelector("button")?.setAttribute("data-ai-download-report", String(index));
+    card.querySelector("strong").textContent = String(report.report || "تقرير النظام").replaceAll("_", " ");
+    card.querySelector("pre").textContent = formatReportPreview(report);
+    log?.appendChild(card);
+  });
+}
+
 function renderContent(root) {
   const role = assistantState.profile?.role || "مستخدم";
   root.innerHTML = `<section class="ai-shell">
@@ -41,6 +113,7 @@ function renderContent(root) {
     <form class="ai-composer" id="ai-composer"><textarea id="ai-message-input" maxlength="4000" rows="2" placeholder="اكتب سؤالك أو العملية المطلوبة..." ${assistantState.loading ? "disabled" : ""}></textarea><button class="primary-button" type="submit" ${assistantState.loading ? "disabled" : ""}><i class="fa-solid fa-paper-plane"></i><span>إرسال</span></button></form>
     <small class="ai-disclaimer">قد تتأثر الإجابة بخدمة Gemini الخارجية؛ العمليات المالية النهائية تبقى محكومة بفحوص قاعدة البيانات الذرية.</small>
   </section>`;
+  renderAssistantExtras(root);
   const log = root.querySelector("#ai-chat-log");
   if (log) log.scrollTop = log.scrollHeight;
 }
@@ -73,6 +146,9 @@ async function sendMessage(root, dataService) {
     assistantState.conversationId = result.conversation_id || assistantState.conversationId;
     assistantState.messages.push({ role: "assistant", content: result.message || "تمت معالجة الطلب.", created_at: new Date().toISOString() });
     if (result.action_request) assistantState.actions.push(result.action_request);
+    if (result.report) assistantState.reports.unshift(result.report);
+    if (Array.isArray(result.suggestions) && result.suggestions.length) assistantState.suggestions = result.suggestions.slice(0, 5);
+    emitUiCommands(result.ui_commands);
   } catch (error) {
     assistantState.messages.push({ role: "assistant", content: `تعذر إكمال الطلب بأمان: ${error.message}. يمكنك إعادة المحاولة دون تكرار أي إجراء؛ فالمساعد يستخدم مفاتيح منع التكرار.`, created_at: new Date().toISOString() });
   } finally {
@@ -107,6 +183,17 @@ async function actOnProposal(root, dataService, id, action) {
 }
 
 export async function handleAssistantInteraction(event, root, dataService) {
+  const suggestion = event.target.closest("[data-ai-suggestion]");
+  if (suggestion) {
+    const input = root.querySelector("#ai-message-input");
+    if (input) { input.value = suggestion.getAttribute("data-ai-suggestion") || ""; input.focus(); }
+    return true;
+  }
+  const download = event.target.closest("[data-ai-download-report]");
+  if (download) {
+    downloadAssistantReport(Number(download.getAttribute("data-ai-download-report")));
+    return true;
+  }
   const prompt = event.target.closest("[data-ai-prompt]");
   if (prompt) {
     const input = root.querySelector("#ai-message-input");
@@ -117,6 +204,7 @@ export async function handleAssistantInteraction(event, root, dataService) {
     assistantState.conversationId = null;
     assistantState.messages = [];
     assistantState.actions = [];
+    assistantState.reports = [];
     renderContent(root);
     return true;
   }
