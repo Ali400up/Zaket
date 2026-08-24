@@ -24,7 +24,7 @@ test("single SQL install file has balanced transaction and dollar delimiters", a
   assert.equal(sqlFiles.length, 1, sqlFiles.join("\n"));
   assert.equal((sql.match(/\$\$/g) || []).length % 2, 0);
   assert.equal((sql.match(/^BEGIN;$/gmi) || []).length, (sql.match(/^COMMIT;$/gmi) || []).length);
-  assert.match(sql.trimEnd(), /UPDATE public\.system_installation SET version='12\.0\.0'[\s\S]*COMMIT;$/);
+  assert.match(sql.trimEnd(), /UPDATE public\.system_installation SET version='12\.1\.0'[\s\S]*COMMIT;$/);
 });
 
 test("database contains every requested reliability contract", () => {
@@ -56,10 +56,17 @@ test("database contains every requested reliability contract", () => {
   assert.match(sql, /authorized_devices_status_active_check/);
   assert.match(sql, /enforce_no_final_offline_trigger/);
   assert.match(sql, /CREATE FUNCTION public\.retry_failed_operation/);
+  assert.match(sql, /branches_operational_manage_v121[\s\S]*'admin','supervisor'/);
+  assert.match(sql, /cashboxes_operational_manage_v121[\s\S]*'admin','supervisor','accountant'/);
+  assert.match(sql, /warehouses_operational_manage_v121[\s\S]*'admin','supervisor','warehouse'/);
+  assert.match(sql, /messages_operational_manage_v121[\s\S]*'admin','supervisor','data_entry','distributor'/);
+  assert.match(sql, /cashbox_users_principal_check[\s\S]*num_nonnulls\(user_id,delegate_id\)=1/);
+  assert.match(app, /validateCashboxUserAssignment\(payload\)/);
+  assert.match(service, /validateCashboxUserAssignment\(data\)/);
 });
 
 test("UI scopes distributor creation and uses explicit status transitions", () => {
-  assert.match(app, /profile\.can_create_beneficiaries === true/);
+  assert.match(app, /profile\?\.can_create_beneficiaries === true/);
   assert.match(app, /payload\.delegate_id = state\.session\.profile\.delegate_id/);
   assert.match(app, /field\.key === "delegate_id"\) && role === "distributor"/);
   assert.match(app, /\["beneficiaries", "campaign_distributors", "authorized_devices"\]/);
@@ -69,6 +76,9 @@ test("UI scopes distributor creation and uses explicit status transitions", () =
   assert.match(service, /set_authorized_device_status/);
   assert.match(service, /createApplicationBackup/);
   assert.match(app, /action === "retry"/);
+  assert.match(app, /tableCreateRoles/);
+  assert.match(app, /roleCanWrite/);
+  assert.match(app, /mutatingRowActions/);
   assert.match(service, /retry_failed_operation/);
   assert.match(service, /allow_offline_drafts === false/);
   assert.match(app, /name="allow_final_offline" type="checkbox" disabled/);

@@ -1,9 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import {
+import * as stateMachines from "../js/state-machines.js";
+
+const {
   money, nextBeneficiaryStatus, nextCampaignDistributorStatus, nextDeviceStatus,
   settleAllocation, reopenAllocation, cancelPaymentAgainstAllocation, validateCashTransfer
-} from "../js/state-machines.js";
+} = stateMachines;
 
 test("rounds monetary values to database precision", () => {
   assert.equal(money(0.1 + 0.2), 0.3);
@@ -59,4 +61,18 @@ test("cash transfer validates identity, status, currency and balance", () => {
   assert.throws(() => validateCashTransfer({ from, to: { ...to, currency: "USD" }, amount: 1 }));
   assert.throws(() => validateCashTransfer({ from, to, amount: 1000.01 }));
   assert.throws(() => validateCashTransfer({ from: { ...from, is_active: false }, to, amount: 1 }));
+});
+
+test("cashbox permission accepts exactly one user or distributor", () => {
+  assert.equal(typeof stateMachines.validateCashboxUserAssignment, "function");
+  assert.deepEqual(stateMachines.validateCashboxUserAssignment({ cashbox_id: "box", user_id: "user", daily_limit: "12.345" }), { daily_limit: 12.35 });
+  assert.deepEqual(stateMachines.validateCashboxUserAssignment({ cashbox_id: "box", delegate_id: "delegate", daily_limit: 0 }), { daily_limit: 0 });
+});
+
+test("cashbox permission rejects missing, duplicate, and negative principals", () => {
+  assert.equal(typeof stateMachines.validateCashboxUserAssignment, "function");
+  assert.throws(() => stateMachines.validateCashboxUserAssignment({ user_id: "user" }), /الصندوق/);
+  assert.throws(() => stateMachines.validateCashboxUserAssignment({ cashbox_id: "box" }), /مستخدماً واحداً أو موزعاً واحداً/);
+  assert.throws(() => stateMachines.validateCashboxUserAssignment({ cashbox_id: "box", user_id: "user", delegate_id: "delegate" }), /مستخدماً واحداً أو موزعاً واحداً/);
+  assert.throws(() => stateMachines.validateCashboxUserAssignment({ cashbox_id: "box", user_id: "user", daily_limit: -1 }), /سالب/);
 });
