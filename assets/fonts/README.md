@@ -1,10 +1,3 @@
-# الخطوط العربية المضمنة
+خط Tajawal من Google Fonts محفوظ محليًا بأوزان 400 و500 و700 و800. ترخيص SIL Open Font License في OFL.txt.
 
-يستخدم مولد الدليل:
-
-- Noto Naskh Arabic للنصوص الطويلة.
-- Noto Kufi Arabic للعناوين والعناصر التنفيذية.
-
-خطوط Noto منشورة بترخيص SIL Open Font License 1.1. أُدرجت ملفات الخطوط داخل الحزمة لضمان ثبات شكل PDF وعدم الاعتماد على خطوط جهاز المدير.
-
-المصدر الرسمي: https://fonts.google.com/noto
+المصدر: https://github.com/google/fonts/tree/main/ofl/tajawal
