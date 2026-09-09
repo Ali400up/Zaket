@@ -5,7 +5,7 @@ export const BACKUP_V3_PART_BYTES_LIMIT = 450000;
 
 const textEncoder = new TextEncoder();
 const TABLE_NAME_PATTERN = /^[a-z_]+$/;
-const SAFE_ARCHIVE_PATH = /^(manifest\.json|checksums\.json|integrity-before\.json|README-RESTORE\.txt|tables\/[a-z_]+\/chunk-\d{6}\.json|human-readable\/[a-z_]+\.csv)$/;
+const SAFE_ARCHIVE_PATH = /^(manifest\.json|checksums\.json|integrity-before\.json|README-RESTORE\.txt|tables\/[a-z_]+\/chunk-\d{6}\.json|human-readable\/[a-z_]+\.csv|storage\/files\/file-\d{6}\.bin)$/;
 
 function requireCrypto() {
   if (!globalThis.crypto?.subtle) throw new Error("لا يدعم هذا المتصفح التحقق المشفر المطلوب للنسخ الاحتياطي.");
@@ -120,8 +120,8 @@ export async function createV3Archive(dataService, options = {}) {
   const tablePlan = Array.isArray(started.tables) ? started.tables : [];
   const manifest = {
     format: BACKUP_V3_FORMAT,
-    version: window.ZAKAT_CONFIG?.version || "12.2.0",
-    schema_version: "12.2.0",
+    version: window.ZAKAT_CONFIG?.version || "12.5.0",
+    schema_version: "12.5.0",
     exported_at: new Date().toISOString(),
     exported_by: started.exported_by || null,
     scope,
@@ -220,12 +220,12 @@ export async function createV3Archive(dataService, options = {}) {
     fileName: "zakat-backup-v3-" + scope + "-" + new Date().toISOString().slice(0, 10) + ".zip"
   };
   } catch (error) {
-    try { await dataService.cancelBackupV3?.(sessionId); } catch { /* lock expires server-side if cancellation cannot reach it */ }
+    try { await dataService.cancelBackupV3?.(sessionId); } catch {                                                                }
     throw error;
   }
 }
 
-export async function inspectV3Archive(file) {
+export async function inspectV3Archive(file, options = {}) {
   const JSZip = getJsZip();
   const zip = await JSZip.loadAsync(file);
   for (const entry of Object.values(zip.files)) {
@@ -247,8 +247,9 @@ export async function inspectV3Archive(file) {
   } catch {
     throw new Error("بيانات تعريف النسخة لا يمكن قراءتها.");
   }
-  if (manifest?.format !== BACKUP_V3_FORMAT || !manifest?.tables || typeof manifest.tables !== "object") {
-    throw new Error("صيغة manifest ليست نسخة زكاة V3 صالحة.");
+  const acceptedFormats = Array.isArray(options.acceptedFormats) && options.acceptedFormats.length ? options.acceptedFormats : [BACKUP_V3_FORMAT];
+  if (!acceptedFormats.includes(manifest?.format) || !manifest?.tables || typeof manifest.tables !== "object") {
+    throw new Error("صيغة manifest ليست نسخة زكاة مدعومة.");
   }
   normalizeScope(manifest.scope);
   if (manifest.checksum_algorithm !== BACKUP_V3_ALGORITHM) {
@@ -342,7 +343,7 @@ export async function normalizeLegacyBackup(backup) {
   const manifest = {
     format: BACKUP_V3_FORMAT,
     version: "legacy-converted",
-    schema_version: "12.2.0",
+    schema_version: "unknown",
     exported_at: backup.exported_at || null,
     scope: "business",
     data_revision: null,

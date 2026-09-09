@@ -40,8 +40,13 @@ export const importDefinitions = {
   },
   items: {
     label: "الأصناف",
-    fields: [field("اسم الصنف", "name", { required: true }), field("التصنيف", "category", { required: true }), field("الوحدة", "unit", { required: true }), field("الوزن أو الحجم", "weight_volume"), field("حد التنبيه", "min_stock", { type: "number", default: 0 }), field("نشط", "is_active", { type: "boolean", default: true }), field("ملاحظات", "notes")],
-    sample: ["أرز", "مواد غذائية", "كيس", "25 كجم", 10, "نعم", ""]
+    fields: [field("اسم الصنف", "name", { required: true }), field("التصنيف", "category", { required: true }), field("الوحدة", "unit_id", { relation: { table: "units", label: "name" }, required: true }), field("سعر الشراء", "purchase_price", { type: "number", required: true }), field("عملة الشراء", "purchase_currency_id", { relation: { table: "currencies", label: "code" }, required: true }), field("الوزن أو الحجم", "weight_volume"), field("حد التنبيه", "min_stock", { type: "number", default: 0 }), field("نشط", "is_active", { type: "boolean", default: true }), field("ملاحظات", "notes")],
+    sample: ["أرز", "مواد غذائية", "كيس", 18000, "YER", "25 كجم", 10, "نعم", ""]
+  },
+  currencies: {
+    label: "العملات",
+    fields: [field("رمز العملة", "code", { required: true }), field("اسم العملة", "name", { required: true }), field("الرمز المختصر", "symbol", { required: true }), field("المنازل العشرية", "decimal_places", { type: "number", default: 2 }), field("العملة الأساسية", "is_base", { type: "boolean", default: false }), field("نشطة", "is_active", { type: "boolean", default: true })],
+    sample: ["YER", "ريال يمني", "ر.ي", 2, "نعم", "نعم"]
   },
   units: {
     label: "الوحدات",

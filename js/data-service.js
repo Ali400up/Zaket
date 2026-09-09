@@ -6,32 +6,39 @@ import { getDeviceFingerprint, getDeviceName } from "./device-identity.js";
 import { nextBeneficiaryStatus, nextCampaignDistributorStatus, nextDeviceStatus, settleAllocation, reopenAllocation, cancelPaymentAgainstAllocation, validateCashTransfer, validateCashboxUserAssignment } from "./state-machines.js";
 import { sha256Hex, utf8ByteLength, BACKUP_V3_PART_LIMIT, BACKUP_V3_PART_BYTES_LIMIT } from "./backup-v3.js";
 import { createBackupManagerClient } from "./backup-edge-client.js";
+import { createStoragePath, normalizeAttachmentPolicy, prepareAttachment } from "./attachment-manager.js";
+import { enrichInKindDetails } from "./in-kind-valuation.js";
+import { markSessionResume, shouldRecordSessionResume } from "./session-audit.js";
+import { requestSystemHealth } from "./system-health.js";
+import { storageKey } from "./storage-scope.js";
 
-const DB_KEY = "zakat_demo_database_v12_1";
-const SESSION_KEY = "zakat_demo_session_v12_1";
+const DB_KEY = storageKey("demo_database");
+const SESSION_KEY = storageKey("demo_session");
 const config = window.ZAKAT_CONFIG || {};
-const liveBackupManager = isSupabaseConfigured
-  ? createBackupManagerClient({
+let liveBackupManager = null;
+function getLiveBackupManager() {
+  if (!supabase) throw new Error("عمليات النسخ تحتاج اتصال Supabase جاهزاً.");
+  liveBackupManager ||= createBackupManagerClient({
       supabase,
       functionName: config.edgeFunctions?.backupManager || "backup-manager",
       getFingerprint: getDeviceFingerprint,
-    })
-  : null;
-const LIVE_CACHE_KEY = "zakat_live_cache_v12_1";
-const LEGACY_LIVE_CACHE_KEYS = ["zakat_live_cache_v11_2", "zakat_live_cache_v11_2_1"];
-const OFFLINE_SESSION_KEY = "zakat_offline_session_v12_1";
-const USER_SESSION_KEY = "zakat_active_user_session_v12_1";
-const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","items","warehouses","stock_balances","system_settings"]);
+    });
+  return liveBackupManager;
+}
+const LIVE_CACHE_KEY = storageKey("live_cache");
+const OFFLINE_SESSION_KEY = storageKey("offline_session");
+const USER_SESSION_KEY = storageKey("active_user_session");
+const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","currencies","currency_exchanges","units","items","warehouses","stock_balances","system_settings"]);
 const DISTRIBUTOR_SCOPED_TABLES = new Set(["beneficiaries", "cash_payments", "in_kind_payments", "distribution_assignments"]);
 const BACKUP_V3_BUSINESS_TABLES = [
   "branches","profiles","delegates","donors","beneficiary_categories","health_conditions",
-  "units","items","warehouses","cashboxes","campaigns","beneficiaries",
-  "beneficiary_household_members","cashbox_users","wallet_providers","message_templates",
+  "currencies","units","items","warehouses","cashboxes","campaigns","beneficiaries",
+  "beneficiary_household_members","cashbox_users",
   "baskets","basket_items","cash_receipts","campaign_funding","campaign_distributors",
-  "cash_transfers","cash_payments","cashbox_ledger","in_kind_receipts",
+  "cash_transfers","currency_exchanges","cash_payments","cashbox_ledger","in_kind_receipts",
   "in_kind_receipt_details","campaign_in_kind_funding","campaign_in_kind_funding_details",
   "inventory_lots","inventory_movements","stock_balances","in_kind_payments",
-  "in_kind_payment_details","bulk_disbursements","disbursement_results","messages",
+  "in_kind_payment_details",
   "distribution_assignments","account_closings","attachments","system_settings"
 ];
 const BACKUP_V3_ADMIN_TABLES = [
@@ -55,6 +62,15 @@ function readStoredSession() {
 }
 function sessionProfileId(session) {
   return String(session?.profile?.id || session?.user?.id || "");
+}
+function authSessionId(session) {
+  const token = String(session?.access_token || "");
+  if (!token.includes(".")) return String(session?.user?.id || "");
+  try {
+    const part = token.split(".")[1].replace(/-/g, "+").replace(/_/g, "/");
+    const padded = part.padEnd(Math.ceil(part.length / 4) * 4, "=");
+    return String(JSON.parse(atob(padded))?.session_id || session?.user?.id || "");
+  } catch { return String(session?.user?.id || ""); }
 }
 export function isCacheEntryOwnedBySession(entry, session, deviceFingerprint) {
   const ownerProfileId = sessionProfileId(session);
@@ -106,15 +122,14 @@ const viewMap = {
   cash_receipts: "v_cash_receipts",
   cash_payments: "v_cash_payments",
   cash_transfers: "v_cash_transfers",
+  currency_exchanges: "v_currency_exchanges",
   distribution_assignments: "v_distribution_assignments",
   authorized_devices: "v_authorized_devices",
   login_attempts: "v_login_attempts",
   user_sessions: "v_user_sessions",
   user_archives: "v_user_archives",
   branches: "v_branches",
-  wallet_providers: "v_wallet_providers",
-  bulk_disbursements: "v_bulk_disbursements",
-  disbursement_results: "v_disbursement_results",
+  currencies: "v_currencies",
   units: "v_units",
   items: "v_items_inventory",
   inventory_lots: "v_inventory_lots",
@@ -123,8 +138,6 @@ const viewMap = {
   in_kind_receipts: "v_in_kind_receipts",
   baskets: "v_baskets",
   in_kind_payments: "v_in_kind_payments",
-  messages: "v_messages",
-  message_templates: "v_message_templates",
   import_jobs: "v_import_jobs",
   account_closings: "v_account_closings",
   audit_logs: "v_audit_logs",
@@ -140,7 +153,7 @@ const childTableMap = {
 
 const idempotentTables = new Set([
   "cash_receipts", "cash_payments", "cash_transfers", "campaign_funding",
-  "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments", "baskets"
+  "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments", "baskets", "currency_exchanges"
 ]);
 
 const atomicDraftRpcMap = {
@@ -152,6 +165,15 @@ const atomicDraftRpcMap = {
 
 function clone(value) {
   return typeof structuredClone === "function" ? structuredClone(value) : JSON.parse(JSON.stringify(value));
+}
+
+function enrichDemoItemDetails(db, details, forceSnapshot = false) {
+  return enrichInKindDetails(details || [], {
+    items: db.items || [],
+    units: db.units || [],
+    currencies: db.currencies || [],
+    forceSnapshot,
+  });
 }
 
 export function nextBeneficiaryToggleStatus(currentStatus) {
@@ -285,11 +307,19 @@ function enrichDemoRow(db, table, row) {
       r.items_count = (r.details || []).length;
       r.total_quantity = sum(r.details || [], "quantity");
       r.items_summary = (r.details || []).map(x => `${relationName(db, "items", x.item_id)} × ${x.quantity}`).join("، ");
+      r.details = enrichDemoItemDetails(db, r.details || []);
       break;
     }
     case "cash_transfers": {
       r.from_cashbox_name = relationName(db, "cashboxes", r.from_cashbox_id);
       r.to_cashbox_name = relationName(db, "cashboxes", r.to_cashbox_id);
+      break;
+    }
+    case "currency_exchanges": {
+      r.from_cashbox_name = relationName(db, "cashboxes", r.from_cashbox_id);
+      r.to_cashbox_name = relationName(db, "cashboxes", r.to_cashbox_id);
+      r.from_currency = findById(db, "cashboxes", r.from_cashbox_id)?.currency || "-";
+      r.to_currency = findById(db, "cashboxes", r.to_cashbox_id)?.currency || "-";
       break;
     }
     case "cash_receipts": {
@@ -309,6 +339,8 @@ function enrichDemoRow(db, table, row) {
       r.receipt_no = relationName(db, "cash_receipts", r.cash_receipt_id, "voucher_no");
       break;
     case "items": {
+      r.unit_name = relationName(db, "units", r.unit_id);
+      r.purchase_currency_code = relationName(db, "currencies", r.purchase_currency_id, "code");
       const lots = db.inventory_lots.filter(x => x.item_id === r.id);
       r.available_qty = lots.reduce((a, x) => a + Number(x.quantity_available || 0), 0);
       r.damaged_qty = lots.reduce((a, x) => a + Number(x.quantity_damaged || 0), 0);
@@ -319,8 +351,11 @@ function enrichDemoRow(db, table, row) {
     }
     case "in_kind_receipts":
       r.donor_name = relationName(db, "donors", r.donor_id);
-      r.campaign_name = relationName(db, "campaigns", r.campaign_id);
-      r.delegate_name = relationName(db, "delegates", r.delegate_id, "full_name");
+      r.donor_is_anonymous = Boolean(findById(db, "donors", r.donor_id)?.is_anonymous);
+      r.donor_display_name = r.donor_is_anonymous ? "فاعل خير" : r.donor_name;
+      r.warehouse_name = relationName(db, "warehouses", r.warehouse_id);
+      r.created_by_name = relationName(db, "profiles", r.created_by, "full_name");
+      r.details = enrichDemoItemDetails(db, r.details || []);
       r.items_count = r.details?.length || 0;
       r.valid_total = (r.details || []).reduce((a, x) => a + Number(x.valid_qty || 0), 0);
       break;
@@ -339,6 +374,7 @@ function enrichDemoRow(db, table, row) {
       r.campaign_name = relationName(db, "campaigns", r.campaign_id);
       r.delegate_name = relationName(db, "delegates", r.delegate_id, "full_name");
       r.basket_name = relationName(db, "baskets", r.basket_id);
+      r.details = enrichDemoItemDetails(db, r.details || []);
       r.items_count = r.details?.length || 0;
       break;
     case "account_closings":
@@ -380,7 +416,17 @@ function validateDemoCreate(db, table, data, editingId = null) {
   if (table === "profiles") duplicate("username", "اسم المستخدم مستخدم مسبقاً.");
   if (table === "donors") duplicate("identity_no", "يوجد متبرع بنفس رقم الهوية أو السجل.");
   if (table === "beneficiaries") duplicate("national_id", "رقم الهوية مسجل مسبقاً.");
-  if (table === "items") duplicate("name", "الصنف موجود مسبقاً.");
+  if (table === "items") {
+    duplicate("name", "الصنف موجود مسبقاً.");
+    if (!data.unit_id || !(Number(data.purchase_price) > 0) || !data.purchase_currency_id) throw new Error("يجب تحديد الوحدة وسعر الشراء وعملته.");
+  }
+  if (table === "currencies") duplicate("code", "رمز العملة مستخدم مسبقاً.");
+  if (table === "currencies" && !(Number(data.rate_to_base) > 0)) throw new Error("سعر تحويل العملة يجب أن يكون أكبر من صفر.");
+  if (table === "currency_exchanges") {
+    if (data.from_cashbox_id === data.to_cashbox_id) throw new Error("اختر صندوقين مختلفين للمصارفة.");
+    if (!(Number(data.from_amount) > 0 && Number(data.exchange_rate) > 0 && Number(data.to_amount) > 0)) throw new Error("أدخل مبالغ وسعر صرف أكبر من صفر.");
+    if (Math.abs(Number(data.from_amount) * Number(data.exchange_rate) - Number(data.to_amount)) > 0.011) throw new Error("المبلغ المستلم لا يطابق المبلغ المصدر × سعر العملية.");
+  }
   if (["beneficiary_categories", "health_conditions"].includes(table)) duplicate("name", "القيمة موجودة مسبقاً.");
   if (table === "campaigns" && data.start_date && data.end_date && data.end_date < data.start_date) throw new Error("تاريخ النهاية يسبق تاريخ البداية.");
   if (table === "cashbox_users") Object.assign(data, validateCashboxUserAssignment(data));
@@ -406,6 +452,7 @@ function generateIdentifiers(db, table, data) {
   if (table === "campaign_funding" && !result.funding_no) result.funding_no = nextNumber(db.campaign_funding || [], "CF", "funding_no");
   if (table === "campaign_in_kind_funding" && !result.funding_no) result.funding_no = nextNumber(db.campaign_in_kind_funding || [], "CIKF", "funding_no");
   if (table === "cash_transfers" && !result.transfer_no) result.transfer_no = nextNumber(db.cash_transfers || [], "CT", "transfer_no");
+  if (table === "currency_exchanges" && !result.exchange_no) result.exchange_no = nextNumber(db.currency_exchanges || [], "FX", "exchange_no");
   if (table === "account_closings" && !result.closing_no) result.closing_no = nextNumber(db.account_closings, "CLS", "closing_no");
   return result;
 }
@@ -429,7 +476,7 @@ function buildDemoStockBalances(db) {
   }
   return [...groups.values()].map(row => {
     const item = findById(db, "items", row.item_id) || {};
-    return { ...row, warehouse_name: relationName(db, "warehouses", row.warehouse_id), item_name: item.name || "-", unit_name: item.unit || "-", min_stock: Number(item.min_stock || 0), status: row.available_qty <= Number(item.min_stock || 0) ? "review" : "active" };
+    return { ...row, warehouse_name: relationName(db, "warehouses", row.warehouse_id), item_name: item.name || "-", unit_name: relationName(db, "units", item.unit_id), min_stock: Number(item.min_stock || 0), status: row.available_qty <= Number(item.min_stock || 0) ? "review" : "active" };
   });
 }
 
@@ -470,6 +517,28 @@ function demoPostCashTransfer(db, id) {
   addDemoLedger(db, { cashbox_id: record.from_cashbox_id, transaction_type: "transfer_out", reference_table: "cash_transfers", reference_id: record.id, debit: Number(record.amount), currency: record.currency || "YER", description: `تحويل صادر - ${record.transfer_no}` });
   addDemoLedger(db, { cashbox_id: record.to_cashbox_id, transaction_type: "transfer_in", reference_table: "cash_transfers", reference_id: record.id, credit: Number(record.amount), currency: record.currency || "YER", description: `تحويل وارد - ${record.transfer_no}` });
   record.status = "posted"; record.posted_at = new Date().toISOString();
+  return record;
+}
+
+function demoPostCurrencyExchange(db, id) {
+  const record = findById(db, "currency_exchanges", id);
+  if (!record) throw new Error("عملية المصارفة غير موجودة.");
+  if (record.status === "posted") return record;
+  if (record.status === "cancelled") throw new Error("لا يمكن ترحيل عملية مصارفة ملغية.");
+  const from = findById(db, "cashboxes", record.from_cashbox_id);
+  const to = findById(db, "cashboxes", record.to_cashbox_id);
+  if (!from?.is_active || !to?.is_active) throw new Error("يجب اختيار صندوقين نشطين.");
+  if (from.id === to.id || from.currency === to.currency) throw new Error("المصارفة تتطلب صندوقين بعملتين مختلفتين.");
+  const fromAmount = Number(record.from_amount || 0);
+  const rate = Number(record.exchange_rate || 0);
+  const toAmount = Number(record.to_amount || 0);
+  const fees = Number(record.fees || 0);
+  if (!(fromAmount > 0 && rate > 0 && toAmount > 0) || fees < 0) throw new Error("قيم المصارفة غير صالحة.");
+  if (demoCashboxBalance(db, from.id) < fromAmount + fees) throw new Error("رصيد الصندوق المصدر لا يكفي المبلغ والعمولة.");
+  addDemoLedger(db, { cashbox_id: from.id, transaction_type: "exchange_out", reference_table: "currency_exchanges", reference_id: record.id, debit: fromAmount + fees, currency: from.currency, description: `مصارفة صادرة - ${record.exchange_no}` });
+  addDemoLedger(db, { cashbox_id: to.id, transaction_type: "exchange_in", reference_table: "currency_exchanges", reference_id: record.id, credit: toAmount, currency: to.currency, description: `مصارفة واردة - ${record.exchange_no}` });
+  record.status = "posted";
+  record.posted_at = new Date().toISOString();
   return record;
 }
 
@@ -528,7 +597,8 @@ function demoPostInKindReceipt(db, id) {
   const warehouse = findById(db, "warehouses", record.warehouse_id);
   if (!warehouse || warehouse.is_active === false) throw new Error("المخزن المستلم غير موجود أو موقوف.");
   if (record.status === "posted") return record;
-  for (const detail of record.details || []) {
+  record.details = enrichDemoItemDetails(db, record.details || [], true);
+  for (const detail of record.details) {
     const total = Number(detail.quantity || 0);
     const qty = Number(detail.valid_qty || 0);
     const damaged = Number(detail.damaged_qty || 0);
@@ -652,6 +722,14 @@ function demoCancel(db, table, id, reason = "إلغاء بواسطة المست�
     addDemoLedger(db, { cashbox_id: record.to_cashbox_id, transaction_type: "refund", reference_table: "cash_transfers", reference_id: record.id, debit: Number(record.amount), currency: record.currency, description: `عكس تحويل وارد - ${record.transfer_no}` });
     addDemoLedger(db, { cashbox_id: record.from_cashbox_id, transaction_type: "refund", reference_table: "cash_transfers", reference_id: record.id, credit: Number(record.amount), currency: record.currency, description: `عكس تحويل صادر - ${record.transfer_no}` });
   }
+  if (table === "currency_exchanges" && record.status === "posted") {
+    const targetBalance = demoCashboxBalance(db, record.to_cashbox_id);
+    if (targetBalance < Number(record.to_amount || 0)) throw new Error("لا يمكن عكس المصارفة لأن رصيد الصندوق المستلم غير كافٍ.");
+    const fromCurrency = findById(db, "cashboxes", record.from_cashbox_id)?.currency || "YER";
+    const toCurrency = findById(db, "cashboxes", record.to_cashbox_id)?.currency || "YER";
+    addDemoLedger(db, { cashbox_id: record.to_cashbox_id, transaction_type: "refund", reference_table: "currency_exchanges", reference_id: record.id, debit: Number(record.to_amount), currency: toCurrency, description: `عكس مصارفة واردة - ${record.exchange_no}` });
+    addDemoLedger(db, { cashbox_id: record.from_cashbox_id, transaction_type: "refund", reference_table: "currency_exchanges", reference_id: record.id, credit: Number(record.from_amount) + Number(record.fees || 0), currency: fromCurrency, description: `عكس مصارفة صادرة - ${record.exchange_no}` });
+  }
   if (table === "campaign_in_kind_funding" && record.status === "posted") {
     const targets = (db.inventory_lots || []).filter(lot => lot.source_funding_id === record.id);
     for (const target of targets) {
@@ -733,10 +811,9 @@ export const dataService = {
   get demoMode() { return !isSupabaseConfigured; },
 
   async initialize() {
-    LEGACY_LIVE_CACHE_KEYS.forEach(key => localStorage.removeItem(key));
     if (!isSupabaseConfigured) ensureDemoDb();
     if ("serviceWorker" in navigator) {
-      try { await navigator.serviceWorker.register("/service-worker.js"); } catch { /* optional */ }
+      try { await navigator.serviceWorker.register("/service-worker.js"); } catch {                }
     }
     window.addEventListener("online", () => { if ((localStorage.getItem("zakat_sync_mode") || "automatic") === "automatic") this.syncQueue(); });
     return true;
@@ -761,7 +838,8 @@ export const dataService = {
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
       return session;
     }
-    // لا نستخدم مزود الهاتف أو SMS. رقم الهاتف يتحول داخلياً إلى بريد تقني غير ظاهر.
+    if (!supabase) throw new Error("لا يمكن تسجيل الدخول الآن لأن مكتبة الاتصال غير متاحة. تحقق من الشبكة ثم أعد المحاولة.");
+
     const digits = phone.replace(/\D/g, "").replace(/^967/, "").replace(/^0+/, "");
     if (!/^7\d{8}$/.test(digits)) throw new Error("أدخل رقم هاتف يمني صحيحاً من 9 أرقام، مثل 777123456.");
     const email = `u${digits}@zakat.local`;
@@ -786,6 +864,8 @@ export const dataService = {
     const { data: openedSession } = await supabase.rpc("open_user_session", { p_fingerprint: fp, p_device_name: dname });
     if (openedSession) localStorage.setItem(USER_SESSION_KEY, String(openedSession));
     const result = { ...data.session, profile };
+    const signedInSessionId = authSessionId(data.session);
+    if (typeof sessionStorage !== "undefined") markSessionResume(sessionStorage, signedInSessionId);
     localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: data.user.id }, profile, deviceFingerprint: fp, cachedAt: new Date().toISOString() }));
     await refreshCachedSettings();
     return result;
@@ -814,6 +894,14 @@ export const dataService = {
     if (!isSupabaseConfigured) {
       const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
       if (session?.expiresAt && session.expiresAt < Date.now()) { localStorage.removeItem(SESSION_KEY); return null; }
+      const markerId = `demo-${session?.profile?.id || ""}`;
+      if (session?.profile?.id && typeof sessionStorage !== "undefined" && shouldRecordSessionResume(sessionStorage, markerId)) {
+        const db = ensureDemoDb();
+        db.login_attempts = db.login_attempts || [];
+        db.login_attempts.unshift({ id: uid("la"), attempted_at: new Date().toISOString(), phone: session.profile.phone || "", device_name: getDeviceName(), ip_address: "محلي", result: "session_resumed", lockout_until: null });
+        writeDemoDb(db);
+        markSessionResume(sessionStorage, markerId);
+      }
       return session;
     }
     if (!isOnline()) {
@@ -830,6 +918,17 @@ export const dataService = {
         return null;
       }
       const profile = await liveProfileCapabilities(await getCurrentProfile(session.user.id));
+      const restoredSessionId = authSessionId(session);
+      if (typeof sessionStorage !== "undefined" && shouldRecordSessionResume(sessionStorage, restoredSessionId)) {
+        const { data: resumedSession, error: resumeError } = await supabase.rpc("resume_authenticated_session", {
+          p_fingerprint: getDeviceFingerprint(),
+          p_device_name: getDeviceName(),
+          p_auth_session_id: restoredSessionId || null
+        });
+        if (resumeError) throw new Error(`تعذر استئناف الجلسة المحفوظة: ${resumeError.message}`);
+        if (resumedSession) localStorage.setItem(USER_SESSION_KEY, String(resumedSession));
+        markSessionResume(sessionStorage, restoredSessionId);
+      }
       const result = { ...session, profile };
       localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: session.user.id }, profile, deviceFingerprint: getDeviceFingerprint(), cachedAt: new Date().toISOString() }));
       await refreshCachedSettings();
@@ -888,6 +987,15 @@ export const dataService = {
       return { data: rows.slice(from, from + pageSize), total };
     }
 
+    if (!supabase || !isOnline()) {
+      const session = readStoredSession();
+      let rows = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session));
+      Object.entries(filters || {}).forEach(([key, value]) => { if (value !== "" && value != null) rows = rows.filter(row => String(row[key]) === String(value)); });
+      if (search) { const q = search.toLowerCase(); rows = rows.filter(row => JSON.stringify(row).toLowerCase().includes(q)); }
+      if (dateKey && dateFrom) rows = rows.filter(row => String(row[dateKey] || "") >= dateFrom);
+      if (dateKey && dateTo) rows = rows.filter(row => String(row[dateKey] || "") <= (dateKey.endsWith("_at") ? `${dateTo}T23:59:59.999` : dateTo));
+      return { data: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, source: "cache", cachedAt: readLiveCache()[table]?.savedAt || null };
+    }
     let query = supabase.from(viewMap[table] || table).select("*", { count: "exact" });
     Object.entries(filters || {}).forEach(([key, value]) => {
       if (value !== "" && value !== undefined && value !== null) query = query.eq(key, value);
@@ -898,6 +1006,7 @@ export const dataService = {
     if (orderBy) query = query.order(orderBy, { ascending, nullsFirst: false });
     const from = (page - 1) * pageSize;
     query = query.range(from, from + pageSize - 1);
+    if (options.signal) query = query.abortSignal(options.signal);
     try {
       const { data, error, count } = await query;
       if (error) throw error;
@@ -923,25 +1032,35 @@ export const dataService = {
       const row = findById(db, table, id);
       return row ? enrichDemoRow(db, table, row) : null;
     }
-    const { data, error } = await supabase.from(table).select("*").eq("id", id).single();
+    if (!supabase || !isOnline()) {
+      const session = readStoredSession();
+      const row = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session)).find(item => String(item.id) === String(id));
+      return row || null;
+    }
+    const { data, error } = await supabase.from(viewMap[table] || table).select("*").eq("id", id).single();
     if (error) throw error;
     if (childTableMap[table]) {
       const child = childTableMap[table];
       const { data: details, error: childError } = await supabase.from(child.table).select("*").eq(child.foreignKey, id);
       if (childError) throw childError;
-      data.details = details || [];
+      const itemIds = [...new Set((details || []).map(detail => detail.item_id).filter(Boolean))];
+      if (itemIds.length) {
+        const { data: itemRows, error: itemError } = await supabase.from("v_items_inventory").select("*").in("id", itemIds);
+        if (itemError) throw itemError;
+        data.details = enrichInKindDetails(details || [], { items: itemRows || [] });
+      } else data.details = details || [];
     }
+    cacheRows(table, [data]);
     return data;
   },
 
   async create(table, payload) {
     const data = { ...payload };
     delete data.password;
-    const postableTables = ["cash_receipts", "cash_payments", "cash_transfers", "campaign_funding", "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments"];
+    const postableTables = ["cash_receipts", "cash_payments", "cash_transfers", "currency_exchanges", "campaign_funding", "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments"];
     const settings = cachedRows("system_settings")[0] || {};
     const shouldAutoPost = postableTables.includes(table) && settings.auto_post_all_operations === true;
-    // Always insert as a draft/open record first. Final posting must go through the
-    // database RPC so balance, permissions and ledger checks are never bypassed.
+
     if (postableTables.includes(table)) data.status = "draft";
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
@@ -966,6 +1085,10 @@ export const dataService = {
         if (data.override_reason && session?.profile?.role !== "admin") throw new Error("الاستثناء من منع التكرار متاح لمدير النظام فقط.");
       }
       validateDemoCreate(db, table, data);
+      if (table === "profiles" && data.first_device_auto_approve === true) {
+        data.first_device_auto_approve_until = new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString();
+      }
+      if (table === "profiles") delete data.first_device_auto_approve;
       const row = generateIdentifiers(db, table, { id: uid(table.slice(0, 3)), ...data, created_at: new Date().toISOString(), updated_at: new Date().toISOString() });
       if (table === "account_closings") {
         const campaign = enrichDemoRow(db, "campaigns", findById(db, "campaigns", row.campaign_id));
@@ -1030,6 +1153,12 @@ export const dataService = {
   async update(table, id, payload) {
     const data = { ...payload };
     delete data.password;
+    if (table === "profiles" && Object.hasOwn(data, "first_device_auto_approve")) {
+      data.first_device_auto_approve_until = data.first_device_auto_approve
+        ? new Date(Date.now() + 72 * 60 * 60 * 1000).toISOString()
+        : null;
+      delete data.first_device_auto_approve;
+    }
     const settings = cachedRows("system_settings")[0] || {};
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
@@ -1102,6 +1231,7 @@ export const dataService = {
         if (table === "cash_receipts") result = demoPostCashReceipt(db, id);
         else if (table === "campaign_funding") result = demoPostCampaignFunding(db, id);
         else if (table === "cash_transfers") result = demoPostCashTransfer(db, id);
+        else if (table === "currency_exchanges") result = demoPostCurrencyExchange(db, id);
         else if (table === "cash_payments") result = demoPostCashPayment(db, id);
         else if (table === "in_kind_receipts") result = demoPostInKindReceipt(db, id);
         else if (table === "campaign_in_kind_funding") result = demoPostCampaignInKindFunding(db, id);
@@ -1136,19 +1266,6 @@ export const dataService = {
           if (campaign) campaign.status = "open";
         }
       }
-      else if (action === "retry" && table === "disbursement_results") {
-        if (record.result !== "failed") throw new Error("يمكن إعادة محاولة النتيجة الفاشلة فقط.");
-        record.result = "pending";
-        record.error_message = null;
-        record.provider_reference = null;
-        record.processed_at = null;
-      }
-      else if (action === "retry" && table === "messages") {
-        if (record.status !== "failed") throw new Error("يمكن إعادة محاولة الرسالة الفاشلة فقط.");
-        record.status = "queued";
-        record.provider_reference = null;
-        record.sent_at = null;
-      }
       record.updated_at = new Date().toISOString();
       auditDemo(db, `${action} ${table}`, table, id, old, record);
       writeDemoDb(db);
@@ -1159,6 +1276,7 @@ export const dataService = {
       "cash_receipts:post": "post_cash_receipt",
       "campaign_funding:post": "post_campaign_funding",
       "cash_transfers:post": "post_cash_transfer",
+      "currency_exchanges:post": "post_currency_exchange",
       "cash_payments:post": "post_cash_payment",
       "in_kind_receipts:post": "post_in_kind_receipt",
       "campaign_in_kind_funding:post": "post_campaign_in_kind_funding",
@@ -1166,6 +1284,7 @@ export const dataService = {
       "cash_receipts:cancel": "cancel_cash_receipt",
       "campaign_funding:cancel": "cancel_campaign_funding",
       "cash_transfers:cancel": "cancel_cash_transfer",
+      "currency_exchanges:cancel": "cancel_currency_exchange",
       "cash_payments:cancel": "cancel_cash_payment",
       "in_kind_receipts:cancel": "cancel_in_kind_receipt",
       "campaign_in_kind_funding:cancel": "cancel_campaign_in_kind_funding",
@@ -1204,11 +1323,6 @@ export const dataService = {
       if (error) throw error;
       return data;
     }
-    if (action === "retry" && ["disbursement_results", "messages"].includes(table)) {
-      const { data, error } = await supabase.rpc("retry_failed_operation", { p_table: table, p_id: id });
-      if (error) throw error;
-      return data;
-    }
     const patch = action === "approve" ? { status: "approved" }
       : action === "confirm-receipt" ? { receipt_status: "received" }
       : action === "toggle" && table === "beneficiaries" ? { status: nextBeneficiaryToggleStatus(extra.current) }
@@ -1221,7 +1335,6 @@ export const dataService = {
     if (error) throw error;
     return data;
   },
-
 
   async getPaymentContext(beneficiaryId, campaignId = null, requestedDelegateId = null) {
     if (!beneficiaryId) throw new Error("اختر مستفيداً معتمداً.");
@@ -1343,7 +1456,7 @@ export const dataService = {
         part_bytes_limit: BACKUP_V3_PART_BYTES_LIMIT
       };
     }
-    try { return await liveBackupManager.startExport({ scope, consistent }); }
+    try { return await getLiveBackupManager().startExport({ scope, consistent }); }
     catch (error) { throw new Error("تعذر بدء النسخة الاحتياطية V3: " + error.message); }
   },
 
@@ -1369,7 +1482,7 @@ export const dataService = {
         data_revision: session.dataRevision
       };
     }
-    try { return await liveBackupManager.exportPart(sessionId, table, afterId || null, safeLimit); }
+    try { return await getLiveBackupManager().exportPart(sessionId, table, afterId || null, safeLimit); }
     catch (error) { throw new Error("تعذر قراءة جزء النسخة لجدول " + table + ": " + error.message); }
   },
 
@@ -1380,7 +1493,7 @@ export const dataService = {
       demoBackupV3Exports.delete(sessionId);
       return { session_id: sessionId, ready: true, data_revision: session.dataRevision };
     }
-    try { return await liveBackupManager.finishExport(sessionId); }
+    try { return await getLiveBackupManager().finishExport(sessionId); }
     catch (error) { throw new Error("تعذر اعتماد النسخة الاحتياطية: " + error.message); }
   },
 
@@ -1390,8 +1503,77 @@ export const dataService = {
       const cancelled = demoBackupV3Exports.delete(sessionId);
       return { session_id: sessionId, cancelled, lock_released: true, demo: true };
     }
-    try { return await liveBackupManager.cancelExport(sessionId); }
+    try { return await getLiveBackupManager().cancelExport(sessionId); }
     catch (error) { throw new Error("تعذر تحرير جلسة النسخ الاحتياطي: " + error.message); }
+  },
+
+  async listStorageFiles() {
+    if (!isSupabaseConfigured) return [];
+    try {
+      const response = await getLiveBackupManager().listStorageFiles();
+      const files = response?.files || response?.result?.files;
+      if (!Array.isArray(files)) throw new Error("استجابة جرد Storage غير صالحة.");
+      return files;
+    } catch (error) {
+      throw new Error("تعذر جرد مرفقات النسخة الاحتياطية: " + error.message);
+    }
+  },
+
+  async getSystemHealth() {
+    let cacheBytes = 0;
+    try { cacheBytes = new Blob([localStorage.getItem(LIVE_CACHE_KEY) || ""]).size; } catch {                           }
+    let deviceStorage = {};
+    try {
+      const estimate = await navigator.storage?.estimate?.();
+      deviceStorage = {
+        device_storage_used_bytes: Number(estimate?.usage || 0),
+        device_storage_quota_bytes: Number(estimate?.quota || 0),
+      };
+    } catch {                            }
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      const databaseBytes = new Blob([JSON.stringify(db)]).size;
+      return {
+        database_bytes: databaseBytes,
+        storage_bytes: 0,
+        storage_objects: 0,
+        attachment_records: (db.attachments || []).length,
+        missing_attachment_files: 0,
+        orphan_storage_files: 0,
+        last_backup_at: null,
+        last_restore_at: null,
+        data_revision: null,
+        cache_bytes: cacheBytes,
+        demo: true,
+        ...deviceStorage,
+      };
+    }
+    return requestSystemHealth({ client: supabase, online: isOnline(), localMetrics: { cache_bytes: cacheBytes, ...deviceStorage } });
+  },
+
+  async downloadStorageFile(storagePath) {
+    if (!isSupabaseConfigured) throw new Error("لا يوجد ملف Storage في وضع العرض.");
+    const { data, error } = await supabase.storage.from("zakat-attachments").download(storagePath);
+    if (error || !(data instanceof Blob)) throw new Error(`تعذر تنزيل المرفق ${storagePath}: ${error?.message || "استجابة فارغة"}`);
+    return data;
+  },
+
+  async uploadStorageFile(storagePath, blob, mimeType = "application/octet-stream") {
+    if (!isSupabaseConfigured) return { path: storagePath, demo: true };
+    const { data, error } = await supabase.storage.from("zakat-attachments").upload(storagePath, blob, {
+      contentType: mimeType,
+      cacheControl: "3600",
+      upsert: false,
+    });
+    if (error) throw new Error(`تعذر استعادة المرفق ${storagePath}: ${error.message}`);
+    return data;
+  },
+
+  async deleteStorageFiles(paths) {
+    if (!Array.isArray(paths) || !paths.length || !isSupabaseConfigured) return { removed: 0 };
+    const { data, error } = await supabase.storage.from("zakat-attachments").remove(paths);
+    if (error) throw new Error(`تعذر تنظيف ملفات Storage الزائدة: ${error.message}`);
+    return { removed: data?.length || paths.length };
   },
 
   async startRestoreV3(manifest, mode = "merge") {
@@ -1407,7 +1589,7 @@ export const dataService = {
         expires_at: new Date(Date.now() + 2 * 60 * 60 * 1000).toISOString()
       };
     }
-    try { return await liveBackupManager.startRestore(manifest, mode); }
+    try { return await getLiveBackupManager().startRestore(manifest, mode); }
     catch (error) { throw new Error("تعذر بدء جلسة الاستعادة: " + error.message); }
   },
 
@@ -1431,7 +1613,7 @@ export const dataService = {
       session.parts.set(key, { table, partNo: Number(partNo), rowsText: safeText, checksum, rowCount: rows.length });
       return { session_id: sessionId, table, part_no: Number(partNo), row_count: rows.length, already_staged: Boolean(old) };
     }
-    try { return await liveBackupManager.stageRestorePart(sessionId, table, Number(partNo), safeText, checksum); }
+    try { return await getLiveBackupManager().stageRestorePart(sessionId, table, Number(partNo), safeText, checksum); }
     catch (error) { throw new Error("فشل رفع جزء " + partNo + " من جدول " + table + ": " + error.message); }
   },
 
@@ -1455,7 +1637,7 @@ export const dataService = {
       session.preflight = report;
       return report;
     }
-    try { return await liveBackupManager.preflightRestore(sessionId); }
+    try { return await getLiveBackupManager().preflightRestore(sessionId); }
     catch (error) { throw new Error("تعذر إجراء المعاينة قبل الاستعادة: " + error.message); }
   },
 
@@ -1486,7 +1668,7 @@ export const dataService = {
       return { success: true, session_id: sessionId, mode: session.mode, restored_rows: Object.values(counts).reduce((total, count) => total + count, 0), counts, demo: true };
     }
     let data;
-    try { data = await liveBackupManager.commitRestore(sessionId, confirmation); }
+    try { data = await getLiveBackupManager().commitRestore(sessionId, confirmation); }
     catch (error) { throw new Error("فشلت الاستعادة وتراجع الخادم عن كل التغييرات: " + error.message); }
     localStorage.removeItem(LIVE_CACHE_KEY);
     return data;
@@ -1513,7 +1695,7 @@ export const dataService = {
       const checksum = [...new Uint8Array(digest)].map(value => value.toString(16).padStart(2, "0")).join("");
       return {
         format: "zakat-backup-v2",
-        version: config.version || "12.2.0",
+        version: config.version || "12.5.0",
         exported_at: new Date().toISOString(),
         mode: "demo-replace",
         tables,
@@ -1550,33 +1732,105 @@ export const dataService = {
         const details = await error.context?.json();
         message = details?.error || message;
         if (details?.request_id) message += ` (مرجع الطلب: ${details.request_id})`;
-      } catch { /* response body unavailable */ }
+      } catch {                                 }
       throw new Error(message);
     }
     if (data?.error) throw new Error(`${data.error}${data.request_id ? ` (مرجع الطلب: ${data.request_id})` : ""}`);
     return data;
   },
 
-  async uploadFile(file, folder = "general") {
-    if (!(file instanceof File)) return null;
-    const maxSize = 5 * 1024 * 1024;
-    if (file.size > maxSize) throw new Error("حجم المرفق يجب ألا يتجاوز 5 ميجابايت.");
-    const allowed = ["image/jpeg", "image/png", "image/webp", "application/pdf"];
-    if (file.type && !allowed.includes(file.type)) throw new Error("نوع المرفق غير مدعوم. استخدم صورة أو PDF.");
-    if (!isSupabaseConfigured) return `demo-files/${Date.now()}-${file.name.replace(/[^A-Za-z0-9._-]/g, "_")}`;
+  async uploadPreparedAttachment(prepared, folder = "general", onProgress = () => {}) {
+    if (!prepared?.blob || !prepared.storageName) throw new Error("المرفق المضغوط غير صالح.");
+    if (!isOnline() && isSupabaseConfigured) throw new Error("رفع المرفقات يحتاج اتصالاً بالإنترنت. بقيت الصورة في النموذج ولم تُرفع.");
+    if (!isSupabaseConfigured) {
+      const storagePath = createStoragePath("demo-user", folder, prepared.storageName);
+      onProgress({ phase: "upload", percent: 100, message: "تم حفظ المرفق في وضع العرض" });
+      return { ...prepared, storagePath };
+    }
 
     const session = await getCurrentSession();
-    if (!session?.user?.id) throw new Error("انتهت الجلسة، سجّل الدخول مجدداً.");
-    const extension = (file.name.split(".").pop() || "bin").toLowerCase().replace(/[^a-z0-9]/g, "");
-    const safeFolder = String(folder || "general").replace(/[^A-Za-z0-9_-]/g, "_");
-    const path = `${session.user.id}/${safeFolder}/${crypto.randomUUID()}.${extension || "bin"}`;
-    const { error } = await supabase.storage.from("zakat-attachments").upload(path, file, {
-      cacheControl: "3600",
-      upsert: false,
-      contentType: file.type || undefined
+    if (!session?.user?.id || !session.access_token) throw new Error("انتهت الجلسة، سجّل الدخول مجدداً.");
+    const storagePath = createStoragePath(session.user.id, folder, prepared.storageName);
+    const encodedPath = storagePath.split("/").map(encodeURIComponent).join("/");
+    const endpoint = `${String(config.supabaseUrl).replace(/\/$/, "")}/storage/v1/object/zakat-attachments/${encodedPath}`;
+
+    await new Promise((resolve, reject) => {
+      const xhr = new XMLHttpRequest();
+      xhr.open("POST", endpoint, true);
+      xhr.setRequestHeader("Authorization", `Bearer ${session.access_token}`);
+      xhr.setRequestHeader("apikey", config.supabaseAnonKey);
+      xhr.setRequestHeader("Content-Type", prepared.mimeType || "application/octet-stream");
+      xhr.setRequestHeader("cache-control", "3600");
+      xhr.setRequestHeader("x-upsert", "false");
+      xhr.upload.addEventListener("progress", event => {
+        const percent = event.lengthComputable ? Math.round((event.loaded / event.total) * 100) : 0;
+        onProgress({ phase: "upload", percent, message: `رفع المرفق ${percent}%` });
+      });
+      xhr.addEventListener("load", () => {
+        if (xhr.status >= 200 && xhr.status < 300) {
+          onProgress({ phase: "upload", percent: 100, message: "اكتمل رفع المرفق" });
+          resolve();
+        } else {
+          let reason = xhr.responseText || `HTTP ${xhr.status}`;
+          try { reason = JSON.parse(xhr.responseText)?.message || reason; } catch {                     }
+          reject(new Error(`فشل رفع المرفق: ${reason}`));
+        }
+      });
+      xhr.addEventListener("error", () => reject(new Error("انقطع الاتصال أثناء رفع المرفق.")));
+      xhr.addEventListener("abort", () => reject(new Error("أُلغي رفع المرفق.")));
+      xhr.send(prepared.blob);
     });
-    if (error) throw error;
-    return path;
+    return { ...prepared, storagePath };
+  },
+
+  async finalizePendingAttachments(entityType, entityId, attachments = []) {
+    const files = attachments.filter(item => item?.storagePath);
+    if (!files.length) return [];
+    if (!isSupabaseConfigured) return files.map(item => ({ ...item, entity_type: entityType, entity_id: entityId }));
+    const rows = files.map(item => ({
+      entity_type: entityType,
+      entity_id: entityId,
+      file_name: item.originalName || item.storageName,
+      storage_path: item.storagePath,
+      mime_type: item.mimeType,
+      size_bytes: item.storedSize,
+      original_size_bytes: item.originalSize,
+      sha256_digest: item.digest,
+      was_compressed: item.compressed === true,
+    }));
+    const { data, error } = await supabase.from("attachments").upsert(rows, { onConflict: "storage_path" }).select();
+    if (error) throw new Error(`رُفع الملف لكن تعذر تسجيل بياناته: ${error.message}`);
+    return data || [];
+  },
+
+  async listEntityAttachments(entityType, entityId, fallbackPaths = []) {
+    let rows = [];
+    if (isSupabaseConfigured) {
+      const { data, error } = await supabase.from("attachments").select("*").eq("entity_type", entityType).eq("entity_id", entityId).order("created_at");
+      if (error) throw new Error(`تعذر تحميل المرفقات: ${error.message}`);
+      rows = data || [];
+    }
+    const known = new Set(rows.map(item => item.storage_path));
+    for (const fallback of fallbackPaths.filter(item => item?.storage_path && !known.has(item.storage_path))) {
+      rows.push({ id: `legacy-${fallback.storage_path}`, file_name: fallback.file_name || "مرفق سابق", storage_path: fallback.storage_path, mime_type: fallback.mime_type || "", size_bytes: null, legacy: true });
+    }
+    return rows;
+  },
+
+  async createAttachmentUrl(storagePath) {
+    if (!storagePath) throw new Error("مسار المرفق فارغ.");
+    if (!isSupabaseConfigured) return storagePath;
+    const { data, error } = await supabase.storage.from("zakat-attachments").createSignedUrl(storagePath, 600);
+    if (error || !data?.signedUrl) throw new Error(`تعذر فتح المرفق: ${error?.message || "لم ينشأ الرابط"}`);
+    return data.signedUrl;
+  },
+
+  async uploadFile(file, folder = "general", settings = {}, onProgress = () => {}) {
+    if (!(file instanceof File)) return null;
+    const kind = /profile|avatar/i.test(folder) ? "profile" : "document";
+    const prepared = await prepareAttachment(file, normalizeAttachmentPolicy(settings, kind), onProgress);
+    const uploaded = await this.uploadPreparedAttachment(prepared, folder, onProgress);
+    return uploaded.storagePath;
   },
 
   async resetUserPassword(id, password) {

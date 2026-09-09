@@ -62,13 +62,18 @@ export const demoData = {
     { id: "cp-3", voucher_no: "CP-2026-0003", payment_date: dateOnly(-7), delegate_id: "d-1", beneficiary_id: "b-3", campaign_id: "c-3", cashbox_id: "cb-2", cash_receipt_id: null, amount: 90000, currency: "YER", delivery_method: "cash", receipt_status: "pending", actual_recipient: "ولي الأمر", transfer_no: null, status: "posted", posted_at: iso(-7), notes: "دفعة كفالة", created_by: "u-accountant", created_at: iso(-7) },
     { id: "cp-4", voucher_no: "CP-2026-0004", payment_date: dateOnly(-1), delegate_id: "d-1", beneficiary_id: "b-3", campaign_id: "c-1", cashbox_id: "cb-1", cash_receipt_id: null, amount: 100000, currency: "YER", delivery_method: "cash", receipt_status: "pending", actual_recipient: null, transfer_no: null, status: "under_review", posted_at: null, notes: "تحت المراجعة", created_by: "u-distributor", created_at: iso(-1) }
   ],
+  currencies: [
+    { id: "cur-yer", code: "YER", name: "ريال يمني", symbol: "ر.ي", decimal_places: 2, rate_to_base: 1, is_base: true, is_active: true },
+    { id: "cur-sar", code: "SAR", name: "ريال سعودي", symbol: "ر.س", decimal_places: 2, rate_to_base: 140, is_base: false, is_active: true },
+    { id: "cur-usd", code: "USD", name: "دولار أمريكي", symbol: "$", decimal_places: 2, rate_to_base: 550, is_base: false, is_active: true }
+  ],
   items: [
-    { id: "i-1", name: "أرز بسمتي", category: "مواد غذائية", unit: "كيس", weight_volume: "10 كجم", min_stock: 30, is_active: true, notes: "الصنف الأساسي", created_at: iso(-180) },
-    { id: "i-2", name: "دقيق أبيض", category: "مواد غذائية", unit: "كيس", weight_volume: "10 كجم", min_stock: 25, is_active: true, notes: null, created_at: iso(-180) },
-    { id: "i-3", name: "زيت طبخ", category: "مواد غذائية", unit: "كرتون", weight_volume: "12 لتر", min_stock: 20, is_active: true, notes: "تنبيه قرب النفاد", created_at: iso(-180) },
-    { id: "i-4", name: "سكر", category: "مواد غذائية", unit: "كيس", weight_volume: "5 كجم", min_stock: 25, is_active: true, notes: null, created_at: iso(-175) },
-    { id: "i-5", name: "بطانية شتوية", category: "كسوة", unit: "قطعة", weight_volume: null, min_stock: 15, is_active: true, notes: null, created_at: iso(-120) },
-    { id: "i-6", name: "حقيبة مدرسية", category: "تعليم", unit: "قطعة", weight_volume: null, min_stock: 50, is_active: true, notes: null, created_at: iso(-20) }
+    { id: "i-1", name: "أرز بسمتي", category: "مواد غذائية", unit_id: "unit-2", purchase_price: 18000, purchase_currency_id: "cur-yer", weight_volume: "10 كجم", min_stock: 30, is_active: true, notes: "الصنف الأساسي", created_at: iso(-180) },
+    { id: "i-2", name: "دقيق أبيض", category: "مواد غذائية", unit_id: "unit-2", purchase_price: 15000, purchase_currency_id: "cur-yer", weight_volume: "10 كجم", min_stock: 25, is_active: true, notes: null, created_at: iso(-180) },
+    { id: "i-3", name: "زيت طبخ", category: "مواد غذائية", unit_id: "unit-3", purchase_price: 26000, purchase_currency_id: "cur-yer", weight_volume: "12 لتر", min_stock: 20, is_active: true, notes: "تنبيه قرب النفاد", created_at: iso(-180) },
+    { id: "i-4", name: "سكر", category: "مواد غذائية", unit_id: "unit-2", purchase_price: 9000, purchase_currency_id: "cur-yer", weight_volume: "5 كجم", min_stock: 25, is_active: true, notes: null, created_at: iso(-175) },
+    { id: "i-5", name: "بطانية شتوية", category: "كسوة", unit_id: "unit-1", purchase_price: 12000, purchase_currency_id: "cur-yer", weight_volume: null, min_stock: 15, is_active: true, notes: null, created_at: iso(-120) },
+    { id: "i-6", name: "حقيبة مدرسية", category: "تعليم", unit_id: "unit-1", purchase_price: 8500, purchase_currency_id: "cur-yer", weight_volume: null, min_stock: 50, is_active: true, notes: null, created_at: iso(-20) }
   ],
   inventory_lots: [
     { id: "lot-g1", item_id: "i-1", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, lot_no: "RICE-01", expiry_date: dateOnly(220), quantity_received: 160, quantity_damaged: 5, quantity_available: 125, created_at: iso(-32) },
@@ -86,15 +91,15 @@ export const demoData = {
     ]}
   ],
   in_kind_receipts: [
-    { id: "ikr-1", voucher_no: "IKR-2026-0001", receipt_date: dateOnly(-32), donor_id: "don-4", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, status: "posted", notes: "مواد سلة رمضان إلى المخزن العام", posted_at: iso(-32), created_by: "u-warehouse", created_at: iso(-32), details: [
+    { id: "ikr-1", voucher_no: "IKR-2026-0001", receipt_date: dateOnly(-32), donor_id: "don-4", warehouse_id: "wh-1", received_by_name: "أمين المخزن", campaign_id: null, delegate_id: null, status: "posted", notes: "مواد سلة رمضان إلى المخزن العام", posted_at: iso(-32), created_by: "u-warehouse", created_at: iso(-32), details: [
       { item_id: "i-1", quantity: 160, valid_qty: 155, damaged_qty: 5, lot_no: "RICE-01", expiry_date: dateOnly(220) },
       { item_id: "i-2", quantity: 150, valid_qty: 148, damaged_qty: 2, lot_no: "FLOUR-01", expiry_date: dateOnly(150) }
     ]},
-    { id: "ikr-2", voucher_no: "IKR-2026-0002", receipt_date: dateOnly(-25), donor_id: "don-2", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, status: "posted", notes: "زيت وسكر إلى المخزن العام", posted_at: iso(-25), created_by: "u-warehouse", created_at: iso(-25), details: [
+    { id: "ikr-2", voucher_no: "IKR-2026-0002", receipt_date: dateOnly(-25), donor_id: "don-2", warehouse_id: "wh-1", received_by_name: "أمين المخزن", campaign_id: null, delegate_id: null, status: "posted", notes: "زيت وسكر إلى المخزن العام", posted_at: iso(-25), created_by: "u-warehouse", created_at: iso(-25), details: [
       { item_id: "i-3", quantity: 80, valid_qty: 80, damaged_qty: 0, lot_no: "OIL-01", expiry_date: dateOnly(300) },
       { item_id: "i-4", quantity: 110, valid_qty: 107, damaged_qty: 3, lot_no: "SUGAR-01", expiry_date: dateOnly(270) }
     ]},
-    { id: "ikr-3", voucher_no: "IKR-2026-0003", receipt_date: dateOnly(0), donor_id: "don-4", warehouse_id: "wh-1", campaign_id: null, delegate_id: null, status: "draft", notes: "مسودة مواد جديدة", posted_at: null, created_by: "u-warehouse", created_at: iso(0), details: [
+    { id: "ikr-3", voucher_no: "IKR-2026-0003", receipt_date: dateOnly(0), donor_id: "don-4", warehouse_id: "wh-1", received_by_name: "أمين المخزن", campaign_id: null, delegate_id: null, status: "draft", notes: "مسودة مواد جديدة", posted_at: null, created_by: "u-warehouse", created_at: iso(0), details: [
       { item_id: "i-1", quantity: 30, valid_qty: 30, damaged_qty: 0, lot_no: "RICE-02", expiry_date: dateOnly(250) }
     ]}
   ],
@@ -162,6 +167,8 @@ export const demoData = {
     {id:"led-cr-3",cashbox_id:"cb-2",transaction_type:"donation",reference_table:"cash_receipts",reference_id:"cr-3",debit:0,credit:750000,currency:"YER",description:"سند قبض - CR-2026-0003",transaction_at:iso(-10),created_at:iso(-10)},
     {id:"led-ct-1-out",cashbox_id:"cb-1",transaction_type:"transfer_out",reference_table:"cash_transfers",reference_id:"ct-1",debit:500000,credit:0,currency:"YER",description:"تحويل صادر - CT-2026-0001",transaction_at:iso(-8),created_at:iso(-8)},
     {id:"led-ct-1-in",cashbox_id:"cb-2",transaction_type:"transfer_in",reference_table:"cash_transfers",reference_id:"ct-1",debit:0,credit:500000,currency:"YER",description:"تحويل وارد - CT-2026-0001",transaction_at:iso(-8),created_at:iso(-8)},
+    {id:"led-fx-1-out",cashbox_id:"cb-1",transaction_type:"exchange_out",reference_table:"currency_exchanges",reference_id:"fx-1",debit:620000,credit:0,currency:"YER",description:"مصارفة صادرة - FX-2026-0001",transaction_at:iso(-6),created_at:iso(-6)},
+    {id:"led-fx-1-in",cashbox_id:"cb-3",transaction_type:"exchange_in",reference_table:"currency_exchanges",reference_id:"fx-1",debit:0,credit:1000,currency:"USD",description:"مصارفة واردة - FX-2026-0001",transaction_at:iso(-6),created_at:iso(-6)},
     {id:"led-cf-1",cashbox_id:"cb-1",transaction_type:"campaign_funding",reference_table:"campaign_funding",reference_id:"cf-1",debit:1000000,credit:0,currency:"YER",description:"تمويل حملة - CF-2026-0001",transaction_at:iso(-5),created_at:iso(-5)},
     {id:"led-cf-2",cashbox_id:"cb-2",transaction_type:"campaign_funding",reference_table:"campaign_funding",reference_id:"cf-2",debit:500000,credit:0,currency:"YER",description:"تمويل حملة - CF-2026-0002",transaction_at:iso(-6),created_at:iso(-6)}
   ],
@@ -186,23 +193,15 @@ export const demoData = {
   cash_transfers: [
     {id:"ct-1",transfer_no:"CT-2026-0001",transfer_date:dateOnly(-8),from_cashbox_id:"cb-1",to_cashbox_id:"cb-2",amount:500000,currency:"YER",status:"posted",notes:"تغذية صندوق الفرع",created_at:iso(-8)}
   ],
+  currency_exchanges: [
+    {id:"fx-1",exchange_no:"FX-2026-0001",exchange_date:dateOnly(-6),from_cashbox_id:"cb-1",to_cashbox_id:"cb-3",from_amount:615000,exchange_rate:0.001626,to_amount:1000,fees:5000,status:"posted",posted_at:iso(-6),notes:"تغذية صندوق الدولار",created_at:iso(-6)}
+  ],
   distribution_assignments: [
     {id:"dist-1",beneficiary_id:"b-1",beneficiary_name:"محمد صالح علي",phone:"771100200",area:"حدة - جوار مدرسة النهضة",delegate_id:"d-1",delegate_name:"عبدالله الصبري",campaign_id:"c-1",amount:120000,delivery_status:"received",delivered_at:iso(-30),payment_id:"cp-1"},
     {id:"dist-2",beneficiary_id:"b-3",beneficiary_name:"عبدالرحمن يحيى",phone:"771100400",area:"حدة - شارع الخمسين",delegate_id:"d-1",delegate_name:"عبدالله الصبري",campaign_id:"c-1",amount:100000,delivery_status:"pending",delivered_at:null,payment_id:"cp-4"}
   ],
-  wallet_providers: [
-    {id:"wp-1",name:"محفظة كاش",provider_type:"wallet",account_format:"9 أرقام هاتف",export_format:"xlsx",is_active:true,notes:"الأعمدة: الاسم، الهاتف، المبلغ، المرجع"},
-    {id:"wp-2",name:"شركة حوالات الأمان",provider_type:"remittance",account_format:"هاتف أو رقم هوية",export_format:"csv",is_active:true,notes:"دعم نتائج نجاح وفشل"}
-  ],
-  bulk_disbursements: [
-    {id:"bd-1",batch_no:"BATCH-2026-001",batch_date:dateOnly(-3),provider_id:"wp-1",campaign_id:"c-1",cashbox_id:"cb-1",beneficiaries_count:25,total_amount:2500000,success_count:23,failed_count:2,status:"processed",notes:"دفعة رمضان الأولى",created_at:iso(-3)}
-  ],
-  disbursement_results: [
-    {id:"dr-1",batch_id:"bd-1",batch_no:"BATCH-2026-001",beneficiary_name:"محمد صالح علي",wallet_no:"771100200",amount:100000,provider_reference:"TX-88102",result:"success",processed_at:iso(-2.9)},
-    {id:"dr-2",batch_id:"bd-1",batch_no:"BATCH-2026-001",beneficiary_name:"عبدالرحمن يحيى",wallet_no:"771100400",amount:90000,provider_reference:null,result:"failed",processed_at:iso(-2.9)}
-  ],
   units: [
-    {id:"un-1",name:"قطعة",symbol:"قطعة",is_active:true},{id:"un-2",name:"كيس",symbol:"كيس",is_active:true},{id:"un-3",name:"كرتون",symbol:"كرتون",is_active:true},{id:"un-4",name:"كيلوجرام",symbol:"كجم",is_active:true},{id:"un-5",name:"لتر",symbol:"لتر",is_active:true}
+    {id:"unit-1",name:"قطعة",symbol:"قطعة",is_active:true},{id:"unit-2",name:"كيس",symbol:"كيس",is_active:true},{id:"unit-3",name:"كرتون",symbol:"كرتون",is_active:true},{id:"unit-4",name:"كيلوجرام",symbol:"كجم",is_active:true},{id:"unit-5",name:"لتر",symbol:"لتر",is_active:true}
   ],
   warehouses: [
     {id:"wh-1",name:"المخزن الرئيسي",code:"WH-HQ-01",branch_id:"br-1",address:"صنعاء - شارع المطار - جوار مسجد الرحمة",manager_name:"علي الآنسي",phone:"777000555",is_active:true},
@@ -212,19 +211,11 @@ export const demoData = {
     {id:"sb-1",warehouse_id:"wh-1",warehouse_name:"المخزن الرئيسي",item_id:"i-1",item_name:"أرز بسمتي",unit_name:"كيس",available_qty:125,reserved_qty:15,damaged_qty:5,min_stock:30,status:"available"},
     {id:"sb-2",warehouse_id:"wh-1",warehouse_name:"المخزن الرئيسي",item_id:"i-3",item_name:"زيت طبخ",unit_name:"كرتون",available_qty:17,reserved_qty:5,damaged_qty:0,min_stock:20,status:"low_stock"}
   ],
-  messages: [
-    {id:"msg-1",sent_at:iso(-1),recipient_name:"محمد صالح علي",phone:"771100200",channel:"sms",subject:"تأكيد الاستلام",status:"sent",message:"تم تسجيل استلام مساعدتك. للشكاوى: 8000000"},
-    {id:"msg-2",sent_at:iso(-0.5),recipient_name:"عبدالله الصبري",phone:"777000444",channel:"whatsapp",subject:"كشف توزيع جديد",status:"queued",message:"تم إسناد كشف جديد إليك."}
-  ],
-  message_templates: [
-    {id:"mt-1",name:"تأكيد استلام مساعدة",event_key:"aid_received",channel:"sms",body:"عزيزي {name}، تم تسجيل استلام مبلغ {amount}. للشكاوى {complaints_phone}",is_active:true,updated_at:iso(-3)},
-    {id:"mt-2",name:"تنبيه محاولة دخول",event_key:"login_lockout",channel:"whatsapp",body:"تنبيه: تم إيقاف المستخدم {user} بعد {attempts} محاولات فاشلة.",is_active:true,updated_at:iso(-4)}
-  ],
   import_jobs: [
     {id:"imp-1",created_at:iso(-10),target_table:"beneficiaries",target_name:"دليل المستفيدين",file_name:"beneficiaries_2026.xlsx",total_rows:500,success_rows:472,error_rows:28,status:"review"},
     {id:"imp-2",created_at:iso(-4),target_table:"items",target_name:"دليل الأصناف",file_name:"items.csv",total_rows:80,success_rows:80,error_rows:0,status:"synced"}
   ],
   system_settings: [
-    { id: 1, organization_name: "مؤسسة الخير للزكاة والتنمية", system_name: "نظام إدارة الزكاة والتبرعات", logo_url: "assets/logo.svg", voucher_prefixes: { cash_receipt: "CR", cash_payment: "CP", in_kind_receipt: "IKR", in_kind_payment: "IKP" }, duplicate_policy: { national_id: "block", phone: "warn", name: "warn" }, require_payment_approval: true, auto_post_all_operations: false, allow_offline_drafts: true, allow_final_offline: false, sync_mode: "automatic", max_login_attempts: 5, lockout_minutes: 15, require_device_authorization: true, complaints_phone: "8000000", stock_alert_days: 30, currency: "YER", print_footer: "جزاكم الله خيراً", retention_years: 10, updated_at: iso(-3) }
+    { id: 1, organization_name: "مؤسسة الخير للزكاة والتنمية", system_name: "نظام إدارة الزكاة والتبرعات", logo_url: "assets/logo.svg", voucher_prefixes: { cash_receipt: "CR", cash_payment: "CP", in_kind_receipt: "IKR", in_kind_payment: "IKP" }, duplicate_policy: { national_id: "block", phone: "warn", name: "warn" }, require_payment_approval: true, auto_post_all_operations: false, allow_offline_drafts: true, allow_final_offline: false, sync_mode: "automatic", max_login_attempts: 5, lockout_minutes: 15, require_device_authorization: true, complaints_phone: "8000000", stock_alert_days: 30, currency: "YER", print_footer: "جزاكم الله خيراً", retention_years: 10, profile_image_max_kb: 120, document_image_max_kb: 350, attachment_original_max_mb: 8, font_scale_percent: 110, supabase_database_limit_mb: 500, supabase_storage_limit_mb: 1024, updated_at: iso(-3) }
   ]
 };

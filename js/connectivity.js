@@ -1,11 +1,13 @@
 const config = window.ZAKAT_CONFIG || {};
+let savedLastSuccess = null;
+try { savedLastSuccess = localStorage.getItem("zakat_last_connection_success"); } catch {                    }
 
 let state = {
   online: false,
   verified: false,
   checking: false,
   lastCheckedAt: null,
-  lastSuccessAt: null,
+  lastSuccessAt: savedLastSuccess,
   lastError: null
 };
 
@@ -38,7 +40,6 @@ function probeTargets() {
     }];
   }
 
-  // وضع Demo: لا نعتمد على navigator.onLine لأنه غير دقيق في بعض WebView.
   return [
     { url: "https://connectivitycheck.gstatic.com/generate_204", mode: "no-cors", requireOk: false, headers: {} },
     { url: "https://clients3.google.com/generate_204", mode: "no-cors", requireOk: false, headers: {} }
@@ -69,7 +70,7 @@ async function probe(target, timeout) {
 }
 
 export function isOnline() {
-  // لا نعتبر الاتصال صالحًا إلا بعد تحقق فعلي ناجح.
+
   return state.verified === true && state.online === true;
 }
 
@@ -85,6 +86,15 @@ export function subscribeConnection(listener) {
 export async function checkConnectivity({ timeout = 5000, silent = false } = {}) {
   if (monitoringStopped) return false;
   if (activeCheck) return activeCheck;
+  if (navigator.onLine === false) {
+    state.online = false;
+    state.verified = true;
+    state.checking = false;
+    state.lastCheckedAt = new Date().toISOString();
+    state.lastError = "الجهاز غير متصل بالشبكة";
+    if (!silent) notify();
+    return false;
+  }
 
   activeCheck = (async () => {
     state.checking = true;
@@ -109,7 +119,10 @@ export async function checkConnectivity({ timeout = 5000, silent = false } = {})
     state.verified = true;
     state.lastError = success ? null : (lastError?.message || "تعذر الوصول إلى خادم فحص الاتصال");
     state.lastCheckedAt = new Date().toISOString();
-    if (success) state.lastSuccessAt = state.lastCheckedAt;
+    if (success) {
+      state.lastSuccessAt = state.lastCheckedAt;
+      try { localStorage.setItem("zakat_last_connection_success", state.lastSuccessAt); } catch {                    }
+    }
     state.checking = false;
     notify();
     return success;
@@ -140,8 +153,8 @@ document.addEventListener("visibilitychange", () => {
 });
 
 periodicCheckTimer = window.setInterval(() => {
-  if (!monitoringStopped) checkConnectivity({ timeout: 4500, silent: true });
-}, 15000);
+  if (!monitoringStopped && navigator.onLine !== false) checkConnectivity({ timeout: 3500, silent: true });
+}, 30000);
 
 function stopConnectivityMonitoring() {
   if (monitoringStopped) return;

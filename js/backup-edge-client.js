@@ -19,7 +19,7 @@ export function createBackupManagerClient({
     });
     if (error) {
       let details = null;
-      try { details = await error.context?.json(); } catch { /* response body unavailable */ }
+      try { details = await error.context?.json(); } catch {                                 }
       throw resultError(details, error.message);
     }
     if (data?.error) throw resultError(data);
@@ -27,6 +27,7 @@ export function createBackupManagerClient({
   }
 
   return {
+    listStorageFiles: () => call("list_storage_files", {}),
     startExport: ({ scope = "business", consistent = false } = {}) => call("start_export", { scope, consistent: Boolean(consistent) }),
     exportPart: (sessionId, table, afterId = null, limit = 100) => call("export_part", { session_id: sessionId, table, after_id: afterId, limit }),
     finishExport: sessionId => call("finish_export", { session_id: sessionId }),

@@ -1,5 +1,6 @@
 import { isOnline } from "./connectivity.js";
-const QUEUE_KEY = "zakat_offline_queue_v1";
+import { storageKey } from "./storage-scope.js";
+const QUEUE_KEY = storageKey("offline_queue");
 
 function readQueue() {
   try { return JSON.parse(localStorage.getItem(QUEUE_KEY) || "[]"); }

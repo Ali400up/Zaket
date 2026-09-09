@@ -1,11 +1,7 @@
-/**
- * إعداد الاتصال بقاعدة Supabase.
- * اترك القيم فارغة لتشغيل وضع العرض التجريبي ببيانات محلية.
- * مفتاح anon/publishable مصمم للاستخدام في الواجهة مع تفعيل RLS.
- */
+
 window.ZAKAT_CONFIG = {
-  supabaseUrl: "https://ljvfkcgrytkjpdtbexlu.supabase.co",
-  supabaseAnonKey: "sb_publishable_bRw7Hn7EBpR99gqdZnCGtQ_MaBZjYED",
+  supabaseUrl: "https://hlxaxsyogigjgwetgsmq.supabase.co",
+  supabaseAnonKey: "sb_publishable_aCZckVgv-x8FWiePrtEWxg_kq3DgHoe",
   demoMode: false,
   edgeFunctions: {
     createUser: "create-user",
@@ -14,11 +10,10 @@ window.ZAKAT_CONFIG = {
     backupManager: "backup-manager"
   },
   appName: "نظام إدارة الزكاة والتبرعات",
-  version: "12.2.0",
-  releaseName: "نسخ Edge موثوق ودليل تنفيذي",
+  version: "12.5.0",
+  releaseName: "واجهة هادئة ومخطط موحد",
   currency: "YER",
   locale: "ar-YE",
   pageSize: 10,
   defaultSyncMode: "automatic"
 };
-

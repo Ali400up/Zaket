@@ -1,12 +1,23 @@
 import { dataService } from "./data-service.js";
 import { menuSections, screenConfigs, reportDefinitions, roleLabels, statusLabels } from "./screen-config.js";
 import { getOfflineQueue, removeQueueItem, clearCompletedQueue } from "./offline.js";
-import { isOnline, checkConnectivity, subscribeConnection } from "./connectivity.js";
+import { isOnline, checkConnectivity, subscribeConnection, getConnectionState } from "./connectivity.js";
 import { importDefinitions, downloadImportTemplate, parseImportFile } from "./import-service.js";
 import { roleDailyGuides, userGuideSections } from "./user-guide.js";
 import { renderAssistantScreen, handleAssistantInteraction } from "./ai-assistant.js";
-import { createV3Archive, inspectV3Archive, normalizeLegacyBackup, downloadV3Archive } from "./backup-v3.js";
+import { inspectV3Archive, normalizeLegacyBackup } from "./backup-v3.js";
+import { createV4Archive, inspectV4Archive, downloadV4Archive, restoreV4Files, cleanupExactV4Files, clearV4Resume } from "./backup-v4.js";
 import { validateCashboxUserAssignment } from "./state-machines.js";
+import { normalizeAttachmentPolicy, prepareAttachment } from "./attachment-manager.js";
+import { buildRecordPrintDocument, buildListPrintDocument } from "./print-service.js";
+import { formatOperationError } from "./error-presenter.js";
+import { RELEASE_NOTES } from "./release-notes.js";
+import { getDeviceName } from "./device-identity.js";
+import { buildNotifications, notificationCount, renderNotificationList } from "./notification-center.js";
+import { formatPrivateValue } from "./screen-values.js";
+import { convertCurrency, deriveExchangeRate, buildCashFlowSummary } from "./currency-service.js";
+import { filterSearchOptions, shouldUseSearchableSelect } from "./searchable-select.js";
+import { healthMetric, describeHealthError } from "./system-health.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -27,8 +38,10 @@ const routeMap = {
   cashboxes: "cashboxes",
   "cashbox-users": "cashbox_users",
   "cash-transfers": "cash_transfers",
+  "currency-exchanges": "currency_exchanges",
   "quick-delivery": "distribution_assignments",
   units: "units",
+  currencies: "currencies",
   warehouses: "warehouses",
   "stock-balances": "stock_balances",
   imports: "import_jobs",
@@ -47,11 +60,6 @@ const routeMap = {
   "campaign-in-kind-funding": "campaign_in_kind_funding",
   baskets: "baskets",
   "in-kind-payments": "in_kind_payments",
-  "wallet-providers": "wallet_providers",
-  "bulk-disbursements": "bulk_disbursements",
-  "disbursement-results": "disbursement_results",
-  messages: "messages",
-  "message-templates": "message_templates",
   closings: "account_closings",
   reports: null,
   audit: "audit_logs",
@@ -69,8 +77,10 @@ const configKeyMap = {
   cashboxes: "cashboxes",
   cashbox_users: "cashbox_users",
   cash_transfers: "cash_transfers",
+  currency_exchanges: "currency_exchanges",
   distribution_assignments: "quick_delivery",
   units: "units",
+  currencies: "currencies",
   warehouses: "warehouses",
   stock_balances: "stock_balances",
   import_jobs: "imports",
@@ -89,22 +99,17 @@ const configKeyMap = {
   campaign_in_kind_funding: "campaign_in_kind_funding",
   baskets: "baskets",
   in_kind_payments: "in_kind_payments",
-  wallet_providers: "wallet_providers",
-  bulk_disbursements: "bulk_disbursements",
-  disbursement_results: "disbursement_results",
-  messages: "messages",
-  message_templates: "message_templates",
   account_closings: "closings",
   audit_logs: "audit_logs"
 };
 
 const roleAccess = {
   admin: "*",
-  supervisor: ["ai-assistant", "branches", "devices", "login-attempts", "user-tracking", "user-archives", "cashboxes", "cashbox-users", "cash-transfers", "quick-delivery", "wallet-providers", "bulk-disbursements", "disbursement-results", "units", "warehouses", "stock-balances", "messages", "message-templates", "imports", "dashboard", "delegates", "donors", "classifications", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "closings", "reports", "audit", "sync"],
-  accountant: ["ai-assistant", "cashboxes", "cashbox-users", "cash-transfers", "wallet-providers", "bulk-disbursements", "disbursement-results", "dashboard", "delegates", "donors", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "closings", "reports"],
-  distributor: ["ai-assistant", "quick-delivery", "messages", "dashboard", "beneficiaries", "cash-payments", "in-kind-payments", "sync"],
-  data_entry: ["ai-assistant", "imports", "messages", "dashboard", "donors", "beneficiaries", "sync"],
-  warehouse: ["ai-assistant", "units", "warehouses", "stock-balances", "dashboard", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "sync"],
+  supervisor: ["ai-assistant", "branches", "devices", "login-attempts", "user-tracking", "user-archives", "cashboxes", "cashbox-users", "cash-transfers", "currency-exchanges", "quick-delivery", "units", "currencies", "warehouses", "stock-balances", "imports", "dashboard", "delegates", "donors", "classifications", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "closings", "reports", "audit", "sync"],
+  accountant: ["ai-assistant", "cashboxes", "cashbox-users", "cash-transfers", "currency-exchanges", "currencies", "dashboard", "delegates", "donors", "beneficiaries", "campaigns", "campaign-funding", "campaign-distributors", "cash-receipts", "cash-payments", "closings", "reports"],
+  distributor: ["ai-assistant", "quick-delivery", "dashboard", "beneficiaries", "cash-payments", "in-kind-payments", "sync"],
+  data_entry: ["ai-assistant", "imports", "dashboard", "donors", "beneficiaries", "sync"],
+  warehouse: ["ai-assistant", "units", "currencies", "warehouses", "stock-balances", "dashboard", "inventory", "in-kind-receipts", "campaign-in-kind-funding", "baskets", "in-kind-payments", "sync"],
   auditor: ["ai-assistant", "cashboxes", "stock-balances", "login-attempts", "user-tracking", "dashboard", "reports", "audit"]
 };
 
@@ -113,6 +118,7 @@ const tableCreateRoles = {
   donors: ["admin", "supervisor", "accountant", "data_entry"], beneficiary_categories: ["admin", "supervisor"],
   health_conditions: ["admin", "supervisor"], beneficiaries: ["admin", "supervisor", "data_entry", "distributor"],
   units: ["admin", "supervisor", "warehouse"], items: ["admin", "supervisor", "warehouse"], warehouses: ["admin", "supervisor", "warehouse"],
+  currencies: ["admin", "supervisor"], currency_exchanges: ["admin", "supervisor", "accountant"],
   cashboxes: ["admin", "supervisor", "accountant"], campaigns: ["admin", "supervisor", "accountant"],
   campaign_funding: ["admin", "supervisor", "accountant"], campaign_distributors: ["admin", "supervisor", "accountant"],
   cashbox_users: ["admin", "supervisor", "accountant"], cash_receipts: ["admin", "supervisor", "accountant"],
@@ -120,9 +126,7 @@ const tableCreateRoles = {
   distribution_assignments: ["admin", "supervisor", "accountant", "distributor"],
   in_kind_receipts: ["admin", "supervisor", "accountant", "warehouse"], campaign_in_kind_funding: ["admin", "supervisor", "warehouse"],
   baskets: ["admin", "supervisor", "warehouse"], in_kind_payments: ["admin", "supervisor", "warehouse", "distributor"],
-  wallet_providers: ["admin", "supervisor", "accountant"], bulk_disbursements: ["admin", "supervisor", "accountant"],
-  disbursement_results: ["admin", "supervisor", "accountant"], messages: ["admin", "supervisor", "data_entry", "distributor"],
-  message_templates: ["admin", "supervisor"], import_jobs: ["admin", "supervisor", "data_entry"],
+  import_jobs: ["admin", "supervisor", "data_entry"],
   account_closings: ["admin", "supervisor", "accountant"]
 };
 
@@ -147,12 +151,18 @@ function roleCanWrite(table, mode = "update") {
 const state = {
   session: null,
   currentScreen: "dashboard",
+  previousScreen: "dashboard",
   classificationTab: "beneficiary_categories",
+  dashboardCurrency: config.currency || "YER",
   reportId: "cash-donors",
   table: { page: 1, pageSize: config.pageSize || 10, search: "", filters: {}, dateFrom: "", dateTo: "" },
   charts: [],
   currentRows: [],
-  currentConfig: null
+  currentConfig: null,
+  currentPrint: { title: "", columns: [] },
+  notifications: [],
+  notificationsLoaded: false,
+  notificationLoading: false
 };
 
 const backupUiState = {
@@ -195,12 +205,15 @@ function setLoading() {
 }
 
 function destroyCharts() {
-  state.charts.forEach(chart => { try { chart.destroy(); } catch { /* noop */ } });
+  state.charts.forEach(chart => { try { chart.destroy(); } catch {            } });
   state.charts = [];
 }
 
 function showLogin() {
   destroyCharts();
+  state.notifications = [];
+  state.notificationsLoaded = false;
+  updateNotificationBadge();
   els.appShell.classList.add("hidden");
   els.loginView.classList.remove("hidden");
   document.body.style.overflow = "";
@@ -219,13 +232,13 @@ function showApp() {
   document.getElementById("sidebar-avatar").textContent = initials(displayName);
   document.getElementById("top-avatar").textContent = initials(displayName);
   const version = document.getElementById("sidebar-version");
-  if (version) version.textContent = `الإصدار ${config.version || "12.2.0"}`;
+  if (version) version.textContent = `الإصدار V${config.version || "12.5.0"}`;
   buildNavigation();
   updateConnectionStatus();
   updateQueueBadge();
   navigate(location.hash.replace("#", "") || "dashboard", false);
+  scheduleNotificationRefresh();
 }
-
 
 function renderMenuIcon(icon) {
   return `<i class="${escapeHtml(icon || "fa-solid fa-circle")}"></i>`;
@@ -249,12 +262,15 @@ async function navigate(screenId, updateHash = true) {
     screenId = "dashboard";
   }
   destroyCharts();
+  if (screenId === "ai-assistant" && state.currentScreen !== "ai-assistant") state.previousScreen = state.currentScreen;
   state.currentScreen = screenId;
   state.table = { page: 1, pageSize: config.pageSize || 10, search: "", filters: {}, dateFrom: "", dateTo: "" };
   if (updateHash) history.pushState(null, "", `#${screenId}`);
   const meta = getScreenMeta(screenId);
   els.pageTitle.textContent = meta.label;
   els.breadcrumb.textContent = meta.label;
+  const pageIcon = document.querySelector("#page-symbol i");
+  if (pageIcon) pageIcon.className = meta.icon || "fa-solid fa-layer-group";
   document.title = `${meta.label} | ${config.appName || "نظام الزكاة"}`;
   buildNavigation();
   els.sidebar.classList.remove("open");
@@ -263,7 +279,7 @@ async function navigate(screenId, updateHash = true) {
 
   try {
     if (screenId === "dashboard") await renderDashboard();
-    else if (screenId === "ai-assistant") await renderAssistantScreen(els.pageContent, dataService, state.session);
+    else if (screenId === "ai-assistant") await renderAssistantScreen(els.pageContent, dataService, state.session, { currentScreen: state.previousScreen });
     else if (screenId === "global-search") await renderReports();
     else if (screenId === "guide") await renderGuide();
     else if (screenId === "classifications") await renderClassifications();
@@ -283,8 +299,8 @@ async function navigate(screenId, updateHash = true) {
 }
 
 function dashboardMetric(iconClass, color, label, value, foot, screen) {
-  return `<button class="metric-card" data-nav="${screen}" style="text-align:right;border-style:solid">
-    <div class="metric-top"><span class="metric-icon ${color}"><i class="${iconClass}"></i></span><span class="metric-trend"><i class="fa-solid fa-arrow-trend-up"></i> مباشر</span></div>
+  return `<button class="metric-card" data-nav="${screen}">
+    <div class="metric-top"><span class="metric-icon ${color}"><i class="${iconClass}" aria-hidden="true"></i></span><span class="metric-open" aria-hidden="true"><i class="fa-solid fa-arrow-left"></i></span></div>
     <span class="metric-label">${escapeHtml(label)}</span><strong class="metric-value">${value}</strong><small class="metric-foot">${escapeHtml(foot)}</small>
   </button>`;
 }
@@ -300,10 +316,12 @@ async function renderDashboard() {
     dataService.list("in_kind_payments", { filters: { status: "under_review" }, pageSize: 20 })
   ]);
 
-  const postedReceipts = receipts.data.filter(x => x.status === "posted");
-  const postedPayments = payments.data.filter(x => x.status === "posted");
-  const receivedTotal = postedReceipts.reduce((a, x) => a + Number(x.amount || 0), 0);
-  const spentTotal = postedPayments.reduce((a, x) => a + Number(x.amount || 0), 0);
+  const displayCurrency = state.dashboardCurrency;
+  const finance = buildCashFlowSummary(receipts.data, payments.data, displayCurrency);
+  const currencyCodes = [...new Set([displayCurrency, "YER", "SAR", "USD", ...receipts.data.map(row => row.currency), ...payments.data.map(row => row.currency)])]
+    .filter(code => /^[A-Z]{3}$/.test(code));
+  const currencyNames = typeof Intl.DisplayNames === "function" ? new Intl.DisplayNames(["ar"], { type: "currency" }) : null;
+  const currencyOptions = currencyCodes.map(code => `<option value="${escapeHtml(code)}" ${code === displayCurrency ? "selected" : ""}>${escapeHtml(currencyNames?.of(code) || code)}</option>`).join("");
   const stockTotal = items.data.reduce((a, x) => a + Number(x.available_qty || 0), 0);
   const activeBeneficiaries = beneficiaries.data.filter(x => x.status === "approved").length;
   const openCampaigns = campaigns.data.filter(x => x.status === "open").length;
@@ -323,23 +341,23 @@ async function renderDashboard() {
 
   els.pageContent.innerHTML = `
     <section class="welcome-banner">
-      <div class="welcome-copy"><span>لوحة المتابعة اليومية</span><h2>مرحباً ${escapeHtml(firstName)}، العمل يسير بصورة جيدة.</h2><p>آخر تحديث: ${formatDate(new Date().toISOString(), true)} • ${dataService.demoMode ? "بيانات تجريبية محلية" : "متصل بقاعدة Supabase"}</p></div>
+      <div class="welcome-copy"><span><i class="fa-regular fa-sun" aria-hidden="true"></i> لوحة المتابعة اليومية</span><h2>مرحباً ${escapeHtml(firstName)}، إليك ملخص العمل.</h2><p>وقت العرض: ${formatDate(new Date().toISOString(), true)} • ${dataService.demoMode ? "بيانات تجريبية محلية" : isOnline() ? "وضع العمل المتصل" : "آخر بيانات محفوظة محلياً"}</p></div>
       <div class="welcome-actions">${canQuickDeliver ? `<button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button>` : ""}${canAddBeneficiary ? `<button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button>` : ""}</div>
     </section>
     <section class="metrics-grid">
       ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", formatNumber(activeBeneficiaries), `${beneficiaries.total} ملف مسجل`, "beneficiaries")}
       ${dashboardMetric("fa-solid fa-bullseye", "purple", "الحملات المفتوحة", formatNumber(openCampaigns), `${campaigns.total} حملة إجمالاً`, "campaigns")}
-      ${dashboardMetric("fa-solid fa-arrow-trend-down", "green", "إجمالي المقبوض", formatCurrency(receivedTotal), "السندات المرحلة فقط", "cash-receipts")}
-      ${dashboardMetric("fa-solid fa-arrow-trend-up", "amber", "إجمالي المصروف", formatCurrency(spentTotal), "السندات المرحلة فقط", "cash-payments")}
+      ${dashboardMetric("fa-solid fa-arrow-trend-down", "green", "المقبوض بالعملة المختارة", formatCurrency(finance.receivedTotal, displayCurrency), "من السندات المرحلة المحمّلة", "cash-receipts")}
+      ${dashboardMetric("fa-solid fa-arrow-trend-up", "amber", "المصروف بالعملة المختارة", formatCurrency(finance.spentTotal, displayCurrency), "من السندات المرحلة المحمّلة", "cash-payments")}
       ${dashboardMetric("fa-solid fa-boxes-stacked", "red", "المخزون المتاح", formatNumber(stockTotal), `${lowStock.length} أصناف تحت الحد`, "inventory")}
     </section>
     <section class="dashboard-grid">
-      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-chart-line"></i></span><div><h3>حركة القبض والصرف</h3><p>مقارنة العمليات النقدية خلال الأشهر الأخيرة</p></div></div><div class="panel-actions"><button class="secondary-button" data-nav="reports"><i class="fa-solid fa-arrow-up-right-from-square"></i> التقارير</button></div></header><div class="panel-body"><div class="chart-wrap"><canvas id="cash-flow-chart"></canvas></div></div></article>
+      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-chart-line"></i></span><div><h3>حركة القبض والصرف</h3><p>آخر ستة أشهر من السندات المحمّلة، بالعملة المختارة</p></div></div><div class="panel-actions"><label class="cash-currency-control">عملة العرض<select class="form-control" data-cash-flow-currency>${currencyOptions}</select></label><button class="secondary-button" data-nav="reports"><i class="fa-solid fa-arrow-up-right-from-square"></i> التقارير</button></div></header><div class="panel-body"><div class="chart-wrap"><canvas id="cash-flow-chart"></canvas></div></div></article>
       <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bell"></i></span><div><h3>التنبيهات المهمة</h3><p>تحتاج إلى متابعة أو قرار</p></div></div><span class="status-badge under_review">${pendingCount + lowStock.length + duplicateCandidates.length} تنبيه</span></header><div class="panel-body"><div class="alert-list">
         ${lowStock.length ? `<div class="alert-item danger"><i class="fa-solid fa-box-open"></i><div class="alert-copy"><strong>مخزون منخفض</strong><span>${lowStock.map(x => x.name).slice(0, 3).join("، ")}</span></div><button data-nav="inventory">فتح</button></div>` : ""}
         ${pendingCount ? `<div class="alert-item warning"><i class="fa-solid fa-hourglass-half"></i><div class="alert-copy"><strong>عمليات تحت المراجعة</strong><span>${pendingCount} سند صرف ينتظر الاعتماد</span></div><button data-nav="cash-payments">فتح</button></div>` : ""}
         ${duplicateCandidates.length ? `<div class="alert-item info"><i class="fa-solid fa-clone"></i><div class="alert-copy"><strong>تشابه في المستفيدين</strong><span>${duplicateCandidates.length} ملف يحتاج فحص التكرار</span></div><button data-nav="beneficiaries">فتح</button></div>` : ""}
-        <div class="alert-item info"><i class="fa-solid fa-cloud-arrow-up"></i><div class="alert-copy"><strong>حالة المزامنة</strong><span>${isOnline() ? "كل الخدمات متصلة" : "الجهاز غير متصل حالياً"}</span></div><button data-nav="sync">عرض</button></div>
+        <div class="alert-item info"><i class="fa-solid fa-cloud-arrow-up"></i><div class="alert-copy"><strong>حالة المزامنة</strong><span>${isOnline() ? "الاتصال متاح؛ راجع قائمة المزامنة" : "الجهاز غير متصل حالياً"}</span></div><button data-nav="sync">عرض</button></div>
       </div></div></article>
     </section>
     <section class="dashboard-grid equal">
@@ -352,25 +370,29 @@ async function renderDashboard() {
       </div></div></article>
     </section>`;
 
-  requestAnimationFrame(() => createCashFlowChart(receipts.data, payments.data));
+  els.pageContent.querySelector("[data-cash-flow-currency]").addEventListener("change", event => {
+    state.dashboardCurrency = event.target.value;
+    const selected = buildCashFlowSummary(receipts.data, payments.data, state.dashboardCurrency);
+    els.pageContent.querySelector('.metric-card[data-nav="cash-receipts"] .metric-value').textContent = formatCurrency(selected.receivedTotal, state.dashboardCurrency);
+    els.pageContent.querySelector('.metric-card[data-nav="cash-payments"] .metric-value').textContent = formatCurrency(selected.spentTotal, state.dashboardCurrency);
+    destroyCharts();
+    createCashFlowChart(receipts.data, payments.data, state.dashboardCurrency);
+  });
+  requestAnimationFrame(() => createCashFlowChart(receipts.data, payments.data, state.dashboardCurrency));
 }
 
-function createCashFlowChart(receipts, payments) {
+function createCashFlowChart(receipts, payments, currency) {
   const canvas = document.getElementById("cash-flow-chart");
   if (!canvas || !window.Chart) return;
-  const months = [];
-  for (let i = 5; i >= 0; i--) {
-    const d = new Date(); d.setMonth(d.getMonth() - i);
-    months.push({ key: `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}`, label: new Intl.DateTimeFormat("ar", { month: "short" }).format(d) });
-  }
-  const monthly = (rows, dateKey) => months.map(m => rows.filter(x => x.status === "posted" && String(x[dateKey] || "").startsWith(m.key)).reduce((a, x) => a + Number(x.amount || 0), 0));
+  const summary = buildCashFlowSummary(receipts, payments, currency);
+  const fontSize = Math.max(11, Math.round(parseFloat(getComputedStyle(document.body).fontSize) * .75));
   const chart = new Chart(canvas, {
     type: "line",
-    data: { labels: months.map(m => m.label), datasets: [
-      { label: "المقبوض", data: monthly(receipts, "receipt_date"), borderColor: "#0f67d8", backgroundColor: "rgba(15,103,216,.09)", fill: true, tension: .42, pointRadius: 3 },
-      { label: "المصروف", data: monthly(payments, "payment_date"), borderColor: "#f59e0b", backgroundColor: "rgba(245,158,11,.05)", fill: true, tension: .42, pointRadius: 3 }
+    data: { labels: summary.months.map(month => new Intl.DateTimeFormat("ar", { month: "short", year: "2-digit" }).format(month.date)), datasets: [
+      { label: "المقبوض", data: summary.received, borderColor: "#0f67d8", backgroundColor: "rgba(15,103,216,.09)", fill: true, tension: .42, pointRadius: 3 },
+      { label: "المصروف", data: summary.spent, borderColor: "#f59e0b", backgroundColor: "rgba(245,158,11,.05)", fill: true, tension: .42, pointRadius: 3 }
     ]},
-    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false }, plugins: { legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 7, font: { family: "Cairo", size: 10 } } } }, scales: { x: { grid: { display: false }, ticks: { font: { family: "Cairo", size: 9 } } }, y: { beginAtZero: true, ticks: { callback: value => Number(value).toLocaleString("ar"), font: { family: "Cairo", size: 9 } }, grid: { color: "rgba(148,163,184,.14)" } } } }
+    options: { responsive: true, maintainAspectRatio: false, interaction: { mode: "index", intersect: false }, plugins: { tooltip: { callbacks: { label: context => `${context.dataset.label}: ${formatCurrency(context.parsed.y, currency)}` } }, legend: { position: "bottom", labels: { usePointStyle: true, boxWidth: 7, font: { family: "Tajawal", size: fontSize } } } }, scales: { x: { grid: { display: false }, ticks: { font: { family: "Tajawal", size: fontSize } } }, y: { beginAtZero: true, ticks: { callback: value => Number(value).toLocaleString("ar"), font: { family: "Tajawal", size: fontSize } }, grid: { color: "rgba(148,163,184,.14)" } } } }
   });
   state.charts.push(chart);
 }
@@ -409,11 +431,12 @@ async function renderDataScreen(cfg, options = {}) {
   state.currentConfig = cfg;
   const result = await dataService.list(cfg.table, { ...state.table, dateKey: cfg.dateKey });
   state.currentRows = result.data;
+  state.currentPrint = { title: cfg.title, columns: cfg.columns };
   const totalPages = Math.max(1, Math.ceil(result.total / state.table.pageSize));
   if (state.table.page > totalPages) state.table.page = totalPages;
 
   els.pageContent.innerHTML = `${renderToolbar(cfg, options.prependToolbar || "")}${genericFilters(cfg)}
-    <section class="table-card"><header class="table-card-header"><div><h3>${escapeHtml(cfg.title)}</h3><p>${formatNumber(result.total)} سجل • الصفحة ${state.table.page} من ${totalPages}</p></div><span class="status-badge active">محدث الآن</span></header>
+    <section class="table-card"><header class="table-card-header"><div class="table-title-block"><span class="table-title-icon" aria-hidden="true">${renderMenuIcon(getScreenMeta(state.currentScreen).icon)}</span><div><h3>${escapeHtml(cfg.title)}</h3><p>${formatNumber(result.total)} سجل • الصفحة ${state.table.page} من ${totalPages}</p></div></div><span class="table-view-label"><i class="fa-solid fa-table-list" aria-hidden="true"></i> السجلات</span></header>
     ${renderTable(cfg, result.data)}
     <footer class="table-footer"><span>عرض ${result.data.length ? (state.table.page - 1) * state.table.pageSize + 1 : 0} - ${Math.min(state.table.page * state.table.pageSize, result.total)} من ${result.total}</span><div class="pagination">
       <button class="page-button" data-page="${Math.max(1, state.table.page - 1)}" ${state.table.page === 1 ? "disabled" : ""}><i class="fa-solid fa-chevron-right"></i></button>
@@ -437,6 +460,7 @@ function renderTable(cfg, rows) {
 
 function renderCell(row, col) {
   const value = row[col.key];
+  if (col.sensitive) return `<span class="private-value"><i class="fa-solid fa-shield-halved" aria-hidden="true"></i>${escapeHtml(formatPrivateValue(value))}</span>`;
   switch (col.type) {
     case "name": return `<div class="cell-title"><span class="cell-avatar">${escapeHtml(initials(value || "س"))}</span><div><strong>${escapeHtml(value || "-")}</strong><small>${escapeHtml(row[col.subKey] || "")}</small></div></div>`;
     case "currency": return `<strong>${formatCurrency(value, row.currency || config.currency)}</strong>`;
@@ -460,7 +484,8 @@ const actionMeta = {
   "open-close": ["fa-solid fa-door-open", "فتح/إغلاق"], post: ["fa-solid fa-stamp", "ترحيل"], print: ["fa-solid fa-print", "طباعة"],
   cancel: ["fa-solid fa-ban", "إلغاء"], "confirm-receipt": ["fa-solid fa-signature", "تأكيد الاستلام"], movements: ["fa-solid fa-arrow-right-arrow-left", "حركة الصنف"],
   copy: ["fa-regular fa-copy", "نسخ"], settle: ["fa-solid fa-scale-balanced", "تسوية"], export: ["fa-solid fa-file-export", "تصدير"], "stock-check": ["fa-solid fa-warehouse", "فحص المخزون"], reopen: ["fa-solid fa-lock-open", "إعادة فتح"],
-  activity: ["fa-solid fa-list-check", "سجل نشاط المستخدم"], "download-template": ["fa-solid fa-file-arrow-down", "تنزيل النموذج"], retry: ["fa-solid fa-rotate-right", "إعادة المحاولة"]
+  activity: ["fa-solid fa-list-check", "سجل نشاط المستخدم"], "download-template": ["fa-solid fa-file-arrow-down", "تنزيل النموذج"], retry: ["fa-solid fa-rotate-right", "إعادة المحاولة"],
+  attachments: ["fa-solid fa-paperclip", "عرض المرفقات"]
 };
 
 function availableActions(cfg, row) {
@@ -469,6 +494,7 @@ function availableActions(cfg, row) {
     if (action === "copy" && !roleCanWrite(cfg.table, "create")) return false;
     if (mutatingRowActions.has(action) && !roleCanWrite(cfg.table, "update")) return false;
     if (action === "retry" && !["admin", "supervisor", "accountant"].includes(role)) return false;
+    if (cfg.table === "authorized_devices" && row.license_kind === "pending_first_device" && action !== "view") return false;
     if (role === "distributor" && cfg.table === "beneficiaries" && ["edit", "approve", "toggle"].includes(action)) return false;
     if (action === "edit" && ["posted", "cancelled", "closed"].includes(row.status)) return false;
     if (action === "edit" && cfg.table === "campaign_distributors" && row.status === "settled") return false;
@@ -480,14 +506,16 @@ function availableActions(cfg, row) {
     if (action === "settle" && row.status !== "active") return false;
     if (action === "reopen" && cfg.table === "campaign_distributors" && (row.status !== "settled" || !row.settled_at)) return false;
     if (action === "toggle" && cfg.table === "campaign_distributors" && !["active", "suspended"].includes(row.status)) return false;
-    if (action === "retry" && (cfg.table === "disbursement_results" ? row.result !== "failed" : row.status !== "failed")) return false;
+    if (action === "retry" && row.status !== "failed") return false;
     return true;
   });
 }
 
 function renderRowActions(cfg, row) {
   const actions = availableActions(cfg, row);
-  return `<div class="row-actions">${actions.map(action => {
+  const hasAttachment = (cfg.fields || []).some(field => field.type === "file" && row[field.key]);
+  const attachmentButton = hasAttachment ? `<button class="row-action attachment-action" data-row-action="attachments" data-id="${row.id}" title="عرض المرفقات" aria-label="عرض المرفقات"><i class="fa-solid fa-paperclip"></i></button>` : "";
+  return `<div class="row-actions">${attachmentButton}${actions.map(action => {
     let meta = actionMeta[action] || ["fa-solid fa-ellipsis", action];
     let stateClass = "";
     if (action === "toggle") {
@@ -524,8 +552,13 @@ async function openRecordForm(cfg, record = null, copyMode = false) {
   const relationFields = activeFields.filter(f => ["relation", "autocompleteRelation"].includes(f.type));
   const relationResults = await Promise.all(relationFields.map(loadRelationOptions));
   const relationMap = new Map(relationFields.map((f, i) => [f.key, relationResults[i]]));
+  const hasFileFields = activeFields.some(field => field.type === "file");
+  const attachmentSettings = hasFileFields ? (await dataService.list("system_settings", { pageSize: 1 })).data[0] || {} : {};
   const itemResult = activeFields.some(f => f.type === "lineItems") ? await dataService.list("items", { pageSize: 1000, filters: { is_active: true } }) : { data: [] };
+  const currencyResult = cfg.table === "currency_exchanges" ? await dataService.list("currencies", { pageSize: 200, filters: { is_active: true } }) : { data: [] };
   let values = record ? { ...record } : {};
+  if (cfg.table === "profiles") values.first_device_auto_approve = Boolean(values.first_device_auto_approve_until && new Date(values.first_device_auto_approve_until) > new Date());
+  if (cfg.table === "in_kind_receipts" && !values.received_by_name) values.received_by_name = profile.full_name || "";
   if (role === "distributor" && activeFields.some(field => field.key === "delegate_id")) {
     values.delegate_id = profile.delegate_id || values.delegate_id;
   }
@@ -544,9 +577,11 @@ async function openRecordForm(cfg, record = null, copyMode = false) {
 
   document.querySelectorAll("[data-add-line-item]").forEach(btn => btn.addEventListener("click", () => addLineItemRow(btn.dataset.mode, itemResult.data)));
   document.querySelectorAll("[data-remove-line-item]").forEach(btn => btn.addEventListener("click", () => btn.closest(".line-item-row").remove()));
-  bindSmartFormFields(cfg);
+  bindSmartFormFields(cfg, relationMap, currencyResult.data, Boolean(record && !copyMode));
+  bindAttachmentFields(activeFields, attachmentSettings);
   const saveButton = document.getElementById("save-record");
   saveButton.addEventListener("click", async () => {
+    let recordPersisted = false;
     try {
       let payload = await collectFormData(activeFields);
       payload = await preparePayloadForSave(cfg, payload, relationMap);
@@ -554,10 +589,23 @@ async function openRecordForm(cfg, record = null, copyMode = false) {
       if (missing.length) throw new Error(`الحقول المطلوبة: ${missing.map(f => f.label).join("، ")}`);
       saveButton.disabled = true; saveButton.innerHTML = `<span class="spinner" style="width:20px;height:20px;border-width:2px"></span> جارٍ الحفظ`;
       const saved = record && !copyMode ? await dataService.update(cfg.table, record.id, payload) : await dataService.create(cfg.table, payload);
+      recordPersisted = true;
+      const uploadedAttachments = uploadedAttachmentsFromFields(activeFields);
+      try {
+        await dataService.finalizePendingAttachments(cfg.table, saved.id || record?.id, uploadedAttachments);
+      } catch (metadataError) {
+        closeModal();
+        toast(`تم حفظ السجل، لكن تعذر تسجيل فهرس المرفق: ${metadataError.message}. الملف محفوظ وسيظهر في النسخة V4.`, "warning");
+        await refreshCurrentScreen();
+        return;
+      }
       closeModal();
       toast(saved?._queued ? "تم حفظ العملية محلياً وستُزامن عند عودة الاتصال." : "تم حفظ البيانات بنجاح.", saved?._queued ? "warning" : "success");
       await refreshCurrentScreen();
     } catch (error) {
+      if (!recordPersisted) {
+        try { await cleanupUploadedAttachments(activeFields); } catch {                                            }
+      }
       saveButton.disabled = false;
       saveButton.innerHTML = `<i class="fa-solid fa-floppy-disk"></i> حفظ البيانات`;
       toast(error.message || "تعذر الحفظ.", "error");
@@ -583,21 +631,88 @@ function renderFormField(field, value, relationOptions = [], itemOptions = []) {
   const locked = field.lockForAll || (field.lockForNonAdmin && role !== "admin")
     || ((field.lockForDistributor || field.key === "delegate_id") && role === "distributor");
   const common = `id="field-${field.key}" name="${field.key}" class="form-control" autocomplete="off" ${field.required ? "required" : ""} ${locked ? "disabled data-locked=\"true\"" : ""}`;
-  if (field.type === "autocompleteRelation") {
+  const smartRelation = ["relation", "autocompleteRelation"].includes(field.type)
+    && shouldUseSearchableSelect(relationOptions.length, field.type === "autocompleteRelation" ? 0 : (field.searchThreshold ?? 8));
+  if (smartRelation) {
     const selected = relationOptions.find(option => String(option.value) === String(value ?? ""));
-    control = `<div class="relation-autocomplete" data-relation-autocomplete="${field.key}"><input id="field-${field.key}-search" class="form-control" type="search" autocomplete="off" placeholder="${escapeHtml(field.placeholder || "ابدأ الكتابة للبحث")}" value="${escapeHtml(selected?.label || "")}" ${field.required ? "required" : ""}><input id="field-${field.key}" name="${field.key}" type="hidden" value="${escapeHtml(value || "")}"><div class="quick-suggestions hidden" data-relation-suggestions>${relationOptions.map(opt => `<button type="button" class="quick-suggestion-item" data-relation-value="${escapeHtml(opt.value)}" data-relation-label="${escapeHtml(opt.label)}" data-delegate-id="${escapeHtml(opt.row?.delegate_id || "")}" data-search="${escapeHtml(String(opt.label || "").toLowerCase())}"><strong>${escapeHtml(opt.label)}</strong><span>${escapeHtml(opt.row?.file_no || opt.row?.phone || "")}</span></button>`).join("")}</div></div>`;
+    control = `<div class="smart-select" data-smart-select="${field.key}" data-relation-autocomplete="${field.key}">
+      <div class="smart-select-input"><i class="fa-solid fa-magnifying-glass"></i><input id="field-${field.key}-search" class="form-control" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="${escapeHtml(field.placeholder || "ابحث ثم اختر من القائمة")}" value="${escapeHtml(selected?.label || "")}" ${field.required ? "required" : ""} ${locked ? "disabled" : ""}><button type="button" class="smart-select-clear ${selected ? "" : "hidden"}" data-smart-clear aria-label="مسح الاختيار"><i class="fa-solid fa-xmark"></i></button></div>
+      <input id="field-${field.key}" name="${field.key}" type="hidden" value="${escapeHtml(value || "")}">
+      <div class="smart-select-menu hidden" role="listbox" data-relation-suggestions>${relationOptions.map(opt => `<button type="button" role="option" class="smart-select-option" data-smart-option data-relation-value="${escapeHtml(opt.value)}" data-relation-label="${escapeHtml(opt.label)}" data-delegate-id="${escapeHtml(opt.row?.delegate_id || "")}" data-name="${escapeHtml(opt.row?.full_name || opt.row?.name || "")}" data-phone="${escapeHtml(opt.row?.phone || "")}" data-currency="${escapeHtml(opt.row?.currency || "")}" data-file-no="${escapeHtml(opt.row?.file_no || "")}"><span class="smart-select-option-icon"><i class="fa-solid fa-check"></i></span><span><strong>${escapeHtml(opt.label)}</strong>${opt.row?.file_no ? `<small>${escapeHtml(opt.row.file_no)}</small>` : ""}</span></button>`).join("")}<div class="smart-select-empty hidden" data-smart-empty><i class="fa-regular fa-face-frown-open"></i><span>لا توجد نتيجة مطابقة</span></div></div>
+    </div>`;
   } else if (field.type === "select" || field.type === "relation") {
     const options = field.type === "relation" ? relationOptions : (field.options || []);
     control = `<select ${common}><option value="">اختر...</option>${options.map(opt => `<option value="${escapeHtml(opt.value)}" ${opt.row ? `data-phone="${escapeHtml(opt.row.phone || "")}" data-name="${escapeHtml(opt.row.full_name || opt.row.name || "")}" data-currency="${escapeHtml(opt.row.currency || "")}"` : ""} ${String(value ?? resolveFieldDefault(field) ?? "") === String(opt.value) ? "selected" : ""}>${escapeHtml(opt.label)}</option>`).join("")}</select>`;
   } else if (field.type === "file") {
-    control = `<div class="file-upload"><input ${common} type="file" accept="${escapeHtml(field.accept || "image/jpeg,image/png,image/webp,application/pdf")}" data-existing-value="${escapeHtml(value || "")}" /><div class="file-upload-copy"><i class="fa-solid fa-cloud-arrow-up"></i><span><strong>اختر صورة أو ملف PDF</strong><small>الحد الأقصى 5 ميجابايت${value ? ` • يوجد مرفق محفوظ` : ""}</small></span></div></div>`;
+    control = `<div class="attachment-field"><div class="file-upload"><input ${common} type="file" accept="${escapeHtml(field.accept || "image/*,application/pdf")}" data-existing-value="${escapeHtml(value || "")}" /><div class="file-upload-copy"><i class="fa-solid fa-cloud-arrow-up"></i><span><strong>اختر صورة بأي صيغة أو ملف PDF</strong><small>تُفحص وتُضغط قبل الرفع${value ? ` • يوجد مرفق محفوظ` : ""}</small></span></div></div><div class="attachment-preview ${value ? "has-existing" : "hidden"}" data-attachment-preview>${value ? `<i class="fa-solid fa-paperclip"></i><span>مرفق محفوظ؛ ارفع ملفاً فقط إذا أردت استبداله</span>` : ""}</div><div class="attachment-progress hidden" data-attachment-progress><div><span data-attachment-message>فحص الملف</span><strong data-attachment-percent>0%</strong></div><div class="progress"><span style="width:0%"></span></div></div></div>`;
   } else if (field.type === "textarea") {
     control = `<textarea ${common} placeholder="${escapeHtml(field.placeholder || "")}">${escapeHtml(value ?? resolveFieldDefault(field) ?? "")}</textarea>`;
   } else {
     const type = field.type === "currency" ? "number" : (field.type || "text");
-    control = `<input ${common} type="${type}" value="${escapeHtml(value ?? resolveFieldDefault(field) ?? "")}" placeholder="${escapeHtml(field.placeholder || "")}" ${field.min !== undefined ? `min="${field.min}"` : ""} ${field.max !== undefined ? `max="${field.max}"` : ""} ${["number", "currency"].includes(field.type) ? `step="${field.type === "currency" ? "0.01" : "1"}"` : ""} />`;
+    control = `<input ${common} type="${type}" value="${escapeHtml(value ?? resolveFieldDefault(field) ?? "")}" placeholder="${escapeHtml(field.placeholder || "")}" ${field.min !== undefined ? `min="${field.min}"` : ""} ${field.max !== undefined ? `max="${field.max}"` : ""} ${["number", "currency"].includes(field.type) ? `step="${field.step ?? (field.type === "currency" ? "0.01" : "1")}"` : ""} />`;
   }
   return `<div class="form-field ${full}">${label}${control}${field.help ? `<span class="help-text">${escapeHtml(field.help)}</span>` : ""}</div>`;
+}
+
+function formatFileSize(bytes) {
+  const value = Number(bytes || 0);
+  if (value < 1024) return `${value} بايت`;
+  if (value < 1024 * 1024) return `${Math.round(value / 1024)} كيلوبايت`;
+  return `${(value / 1024 / 1024).toFixed(1)} ميجابايت`;
+}
+
+function updateAttachmentProgress(input, event) {
+  const field = input.closest(".attachment-field");
+  const progress = field?.querySelector("[data-attachment-progress]");
+  if (!progress) return;
+  progress.classList.remove("hidden");
+  progress.querySelector("[data-attachment-message]").textContent = event.message || "معالجة المرفق";
+  progress.querySelector("[data-attachment-percent]").textContent = `${event.percent || 0}%`;
+  progress.querySelector(".progress > span").style.width = `${Math.max(0, Math.min(100, event.percent || 0))}%`;
+}
+
+function bindAttachmentFields(fields, settings) {
+  for (const field of fields.filter(item => item.type === "file")) {
+    const input = document.getElementById(`field-${field.key}`);
+    if (!input) continue;
+    input.addEventListener("change", () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      const kind = /profile|avatar/i.test(field.folder || field.key) ? "profile" : "document";
+      const policy = normalizeAttachmentPolicy(settings, kind);
+      input._preparePromise = prepareAttachment(file, policy, event => updateAttachmentProgress(input, event))
+        .then(prepared => {
+          input._preparedAttachment = prepared;
+          const preview = input.closest(".attachment-field")?.querySelector("[data-attachment-preview]");
+          if (preview) {
+            preview.classList.remove("hidden");
+            const visual = prepared.mimeType.startsWith("image/") && prepared.previewUrl
+              ? `<img src="${escapeHtml(prepared.previewUrl)}" alt="معاينة المرفق">`
+              : `<i class="fa-solid fa-file-pdf"></i>`;
+            preview.innerHTML = `${visual}<span><strong>${escapeHtml(prepared.originalName)}</strong><small>${formatFileSize(prepared.originalSize)} ← ${formatFileSize(prepared.storedSize)}${prepared.compressed ? " بعد الضغط" : " دون تغيير"}</small></span>`;
+          }
+          return prepared;
+        })
+        .catch(error => {
+          input.value = "";
+          input._preparedAttachment = null;
+          updateAttachmentProgress(input, { percent: 0, message: error.message });
+          toast(error.message || "تعذر تجهيز المرفق.", "error");
+          return null;
+        });
+    });
+  }
+}
+
+function uploadedAttachmentsFromFields(fields) {
+  return fields.filter(field => field.type === "file")
+    .map(field => document.getElementById(`field-${field.key}`)?._uploadedAttachment)
+    .filter(Boolean);
+}
+
+async function cleanupUploadedAttachments(fields) {
+  const paths = uploadedAttachmentsFromFields(fields).map(item => item.storagePath).filter(Boolean);
+  if (paths.length) await dataService.deleteStorageFiles(paths);
 }
 
 function resolveFieldDefault(field) {
@@ -607,58 +722,98 @@ function resolveFieldDefault(field) {
   return now.toISOString().slice(0, 10);
 }
 
-function bindSmartFormFields(cfg) {
+function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], editing = false) {
   const role = state.session?.profile?.role || "data_entry";
-  document.querySelectorAll("[data-relation-autocomplete]").forEach(wrapper => {
+  document.querySelectorAll("[data-smart-select]").forEach(wrapper => {
     const search = wrapper.querySelector('input[type="search"]');
     const hidden = wrapper.querySelector('input[type="hidden"]');
     const suggestions = wrapper.querySelector("[data-relation-suggestions]");
-    const options = [...suggestions.querySelectorAll("[data-relation-value]")];
+    const optionNodes = [...suggestions.querySelectorAll("[data-smart-option]")];
+    const clear = wrapper.querySelector("[data-smart-clear]");
+    const empty = wrapper.querySelector("[data-smart-empty]");
+    let activeIndex = -1;
     const showMatches = (clearSelection = true) => {
-      const term = search.value.trim().toLowerCase();
-      if (clearSelection) hidden.value = "";
+      if (clearSelection && search.value !== hidden.dataset.selectedLabel) {
+        hidden.value = "";
+        clear?.classList.add("hidden");
+      }
+      const source = optionNodes.map(node => ({ value: node.dataset.relationValue, label: node.dataset.relationLabel, row: { file_no: node.dataset.fileNo } }));
+      const matches = new Set(filterSearchOptions(source, search.value, ["file_no"]).map(option => String(option.value)));
       let visible = 0;
-      options.forEach(option => {
-        const text = option.dataset.search || "";
-        const match = term.length > 0 && (text.startsWith(term) || text.includes(term));
-        option.classList.toggle("hidden", !match || visible >= 12);
-        if (match && visible < 12) visible += 1;
+      optionNodes.forEach(option => {
+        const match = matches.has(String(option.dataset.relationValue));
+        option.classList.toggle("hidden", !match || visible >= 20);
+        option.classList.remove("active");
+        if (match && visible < 20) visible += 1;
       });
-      suggestions.classList.toggle("hidden", !term);
+      empty?.classList.toggle("hidden", visible > 0);
+      suggestions.classList.remove("hidden");
+      search.setAttribute("aria-expanded", "true");
+      activeIndex = -1;
     };
     search.addEventListener("input", () => showMatches(true));
     search.addEventListener("focus", () => showMatches(false));
+    search.addEventListener("blur", () => setTimeout(() => {
+      suggestions.classList.add("hidden");
+      search.setAttribute("aria-expanded", "false");
+    }, 150));
+    search.addEventListener("keydown", event => {
+      const visible = optionNodes.filter(option => !option.classList.contains("hidden"));
+      if (event.key === "Escape") { suggestions.classList.add("hidden"); search.setAttribute("aria-expanded", "false"); return; }
+      if (!["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+      event.preventDefault();
+      if (event.key === "Enter" && activeIndex >= 0) return visible[activeIndex]?.click();
+      const step = event.key === "ArrowUp" ? -1 : 1;
+      activeIndex = Math.max(0, Math.min(visible.length - 1, activeIndex + step));
+      visible.forEach((option, index) => option.classList.toggle("active", index === activeIndex));
+      visible[activeIndex]?.scrollIntoView({ block: "nearest" });
+    });
     suggestions.addEventListener("click", event => {
       const option = event.target.closest("[data-relation-value]");
       if (!option) return;
       hidden.value = option.dataset.relationValue;
       search.value = option.dataset.relationLabel;
+      hidden.dataset.selectedLabel = search.value;
+      optionNodes.forEach(node => node.setAttribute("aria-selected", String(node === option)));
+      clear?.classList.remove("hidden");
       suggestions.classList.add("hidden");
-      hidden.dispatchEvent(new CustomEvent("relation:selected", { bubbles: true, detail: { id: hidden.value, delegateId: option.dataset.delegateId || null } }));
+      search.setAttribute("aria-expanded", "false");
+      hidden.dispatchEvent(new CustomEvent("relation:selected", { bubbles: true, detail: { id: hidden.value, delegateId: option.dataset.delegateId || null, name: option.dataset.name || "", phone: option.dataset.phone || "", currency: option.dataset.currency || "" } }));
     });
+    clear?.addEventListener("click", () => {
+      hidden.value = ""; search.value = ""; hidden.dataset.selectedLabel = "";
+      clear.classList.add("hidden"); showMatches(false); search.focus();
+      hidden.dispatchEvent(new CustomEvent("relation:selected", { bubbles: true, detail: { id: null } }));
+    });
+    hidden.dataset.selectedLabel = search.value;
+    optionNodes.forEach(node => node.setAttribute("aria-selected", String(node.dataset.relationValue === hidden.value)));
   });
   const profileSelect = document.getElementById("field-profile_id");
   if (profileSelect && cfg.table === "delegates") {
-    const fillDelegate = () => {
-      const option = profileSelect.selectedOptions[0];
-      if (!option?.value) return;
+    const fillDelegate = event => {
+      const option = profileSelect.selectedOptions?.[0];
+      const selected = event?.detail || { id: option?.value, name: option?.dataset.name, phone: option?.dataset.phone };
+      if (!selected?.id) return;
       const name = document.getElementById("field-full_name");
       const phone = document.getElementById("field-phone");
-      if (name) name.value = option.dataset.name || name.value;
-      if (phone) phone.value = option.dataset.phone || phone.value;
+      if (name) name.value = selected.name || name.value;
+      if (phone) phone.value = selected.phone || phone.value;
     };
     profileSelect.addEventListener("change", fillDelegate);
+    profileSelect.addEventListener("relation:selected", fillDelegate);
     fillDelegate();
   }
   ["cashbox_id", "from_cashbox_id"].forEach(key => {
     const select = document.getElementById(`field-${key}`);
     if (!select) return;
-    const syncCurrency = () => {
+    const syncCurrency = event => {
       const currency = document.getElementById("field-currency");
-      const option = select.selectedOptions[0];
-      if (currency && option?.dataset.currency) currency.value = option.dataset.currency;
+      const option = select.selectedOptions?.[0];
+      const currencyCode = event?.detail?.currency || option?.dataset.currency;
+      if (currency && currencyCode) currency.value = currencyCode;
     };
     select.addEventListener("change", syncCurrency);
+    select.addEventListener("relation:selected", syncCurrency);
     syncCurrency();
   });
 
@@ -695,8 +850,44 @@ function bindSmartFormFields(cfg) {
     };
     beneficiary?.addEventListener("relation:selected", refreshContext);
     campaign?.addEventListener("change", refreshContext);
-    if (role === "admin") delegate?.addEventListener("change", refreshContext);
+    campaign?.addEventListener("relation:selected", refreshContext);
+    if (role === "admin") {
+      delegate?.addEventListener("change", refreshContext);
+      delegate?.addEventListener("relation:selected", refreshContext);
+    }
     if (beneficiary?.value && campaign?.value && delegate?.value) refreshContext();
+  }
+  if (cfg.table === "currency_exchanges") {
+    const fromBoxInput = document.getElementById("field-from_cashbox_id");
+    const toBoxInput = document.getElementById("field-to_cashbox_id");
+    const fromAmountInput = document.getElementById("field-from_amount");
+    const rateInput = document.getElementById("field-exchange_rate");
+    const toAmountInput = document.getElementById("field-to_amount");
+    const relationRow = (key, id) => (relationMap.get(key) || []).find(option => String(option.value) === String(id || ""))?.row;
+    const currencyRow = code => currencyRows.find(row => String(row.code) === String(code));
+    const updateTargetAmount = () => {
+      const amount = Number(fromAmountInput?.value || 0);
+      const rate = Number(rateInput?.value || 0);
+      if (toAmountInput && amount > 0 && rate > 0) toAmountInput.value = String(Math.round((amount * rate + Number.EPSILON) * 100) / 100);
+    };
+    const applyDirectoryRate = () => {
+      const fromBox = relationRow("from_cashbox_id", fromBoxInput?.value);
+      const toBox = relationRow("to_cashbox_id", toBoxInput?.value);
+      const fromCurrency = currencyRow(fromBox?.currency);
+      const toCurrency = currencyRow(toBox?.currency);
+      if (!rateInput || !fromCurrency || !toCurrency || fromBox?.currency === toBox?.currency) return;
+      rateInput.value = String(deriveExchangeRate(fromCurrency.rate_to_base, toCurrency.rate_to_base));
+      if (fromAmountInput && toAmountInput && Number(fromAmountInput.value) >= 0) {
+        toAmountInput.value = String(convertCurrency(fromAmountInput.value, fromCurrency.rate_to_base, toCurrency.rate_to_base, toCurrency.decimal_places ?? 2));
+      }
+    };
+    [fromBoxInput, toBoxInput].forEach(input => {
+      input?.addEventListener("change", applyDirectoryRate);
+      input?.addEventListener("relation:selected", applyDirectoryRate);
+    });
+    fromAmountInput?.addEventListener("input", updateTargetAmount);
+    rateInput?.addEventListener("input", updateTargetAmount);
+    if (!editing) applyDirectoryRate();
   }
 }
 
@@ -731,6 +922,22 @@ async function preparePayloadForSave(cfg, payload, relationMap) {
     if (Number(payload.amount) > Number(from.current_balance || 0)) throw new Error(`الرصيد غير كافٍ. المتاح في ${from.name}: ${formatCurrency(from.current_balance, from.currency)}.`);
     payload.currency = from.currency;
   }
+  if (cfg.table === "currencies") {
+    if (!(Number(payload.rate_to_base) > 0)) throw new Error("سعر تحويل العملة يجب أن يكون أكبر من صفر.");
+    payload.code = String(payload.code || "").trim().toUpperCase();
+    if (!/^[A-Z]{3}$/.test(payload.code)) throw new Error("رمز العملة يجب أن يتكون من ثلاثة أحرف إنجليزية، مثل YER.");
+    if (payload.is_base) payload.rate_to_base = 1;
+  }
+  if (cfg.table === "currency_exchanges") {
+    if (String(payload.from_cashbox_id) === String(payload.to_cashbox_id)) throw new Error("المصارفة تحتاج صندوقين مختلفين.");
+    const from = findRelation("from_cashbox_id", payload.from_cashbox_id);
+    const to = findRelation("to_cashbox_id", payload.to_cashbox_id);
+    if (!from || !to || from.currency === to.currency) throw new Error("اختر صندوقين نشطين بعملتين مختلفتين.");
+    const calculated = Number(payload.from_amount) * Number(payload.exchange_rate);
+    if (!(calculated > 0) || Math.abs(calculated - Number(payload.to_amount)) > 0.011) {
+      throw new Error(`المبلغ المستلم لا يطابق المبلغ المصدر × سعر العملية. المتوقع ${calculated.toFixed(2)}.`);
+    }
+  }
   if (cfg.table === "cash_payments") {
     const context = await dataService.getPaymentContext(payload.beneficiary_id, payload.campaign_id, payload.delegate_id);
     payload.delegate_id = context.delegate_id;
@@ -750,7 +957,7 @@ async function preparePayloadForSave(cfg, payload, relationMap) {
 }
 
 function lineItemRow(mode, items, values = {}) {
-  const options = items.map(item => `<option value="${item.id}" ${String(values.item_id || "") === String(item.id) ? "selected" : ""}>${escapeHtml(item.name)} (${escapeHtml(item.unit || "")})</option>`).join("");
+  const options = items.map(item => `<option value="${item.id}" ${String(values.item_id || "") === String(item.id) ? "selected" : ""}>${escapeHtml(item.name)} (${escapeHtml(item.unit_name || "")})</option>`).join("");
   if (mode === "receipt") {
     return `<div class="line-item-row receipt"><div class="form-field"><label>الصنف</label><select class="form-control line-item-product"><option value="">اختر الصنف</option>${options}</select></div><div class="form-field"><label>الكمية الكلية</label><input class="form-control line-item-qty" type="number" min="1" value="${values.quantity || ""}"></div><div class="form-field"><label>الصالحة</label><input class="form-control line-item-valid" type="number" min="0" value="${values.valid_qty ?? ""}"></div><div class="form-field"><label>التالفة</label><input class="form-control line-item-damaged" type="number" min="0" value="${values.damaged_qty ?? 0}"></div><div class="form-field"><label>التشغيلة / الصلاحية</label><div style="display:grid;grid-template-columns:1fr 1fr;gap:5px"><input class="form-control line-item-lot" placeholder="رقم التشغيلة" value="${escapeHtml(values.lot_no || "")}"><input class="form-control line-item-expiry" type="date" value="${escapeHtml(values.expiry_date || "")}"></div></div><button class="line-item-remove" type="button" data-remove-line-item><i class="fa-solid fa-trash"></i></button></div>`;
   }
@@ -803,7 +1010,13 @@ async function collectFormData(fields) {
     if (field.type === "switch") result[field.key] = input.checked;
     else if (field.type === "file") {
       const file = input.files?.[0];
-      result[field.key] = file ? await dataService.uploadFile(file, field.folder || field.key) : (input.dataset.existingValue || null);
+      if (file) {
+        const prepared = input._preparedAttachment || await input._preparePromise;
+        if (!prepared) throw new Error(`تعذر تجهيز ${field.label}.`);
+        const uploaded = await dataService.uploadPreparedAttachment(prepared, field.folder || field.key, event => updateAttachmentProgress(input, event));
+        input._uploadedAttachment = uploaded;
+        result[field.key] = uploaded.storagePath;
+      } else result[field.key] = input.dataset.existingValue || null;
     } else if (["number", "currency"].includes(field.type)) result[field.key] = input.value === "" ? null : Number(input.value);
     else result[field.key] = input.value === "" ? null : input.value;
   }
@@ -813,12 +1026,17 @@ async function collectFormData(fields) {
 async function handleRowAction(action, id) {
   const cfg = state.currentConfig;
   if (!cfg) return;
-  const record = await dataService.get(cfg.table, id);
-  if (!record) return toast("تعذر العثور على السجل.", "error");
+  const preparedPrintWindow = action === "print" ? window.open("", "_blank", "width=920,height=980") : null;
+  if (preparedPrintWindow) preparedPrintWindow.document.write('<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>تجهيز الطباعة</title><body style="font-family:Arial;padding:40px">جاري تجهيز المستند...</body></html>');
+  let record;
+  try { record = await dataService.get(cfg.table, id); }
+  catch (error) { if (preparedPrintWindow) preparedPrintWindow.close(); return toast(error.message || "تعذر تحميل السجل.", "error"); }
+  if (!record) { if (preparedPrintWindow) preparedPrintWindow.close(); return toast("تعذر العثور على السجل.", "error"); }
   try {
     if (action === "view") return showRecordDetails(cfg, record);
+    if (action === "attachments") return showRecordAttachments(cfg, record);
     if (action === "edit") return openRecordForm(cfg, record);
-    if (action === "print") return printRecord(cfg, record);
+    if (action === "print") return printRecord(cfg, record, preparedPrintWindow);
     if (action === "toggle") {
       const statusToggle = ["beneficiaries", "campaign_distributors", "authorized_devices"].includes(cfg.table);
       const current = statusToggle ? record.status : record.is_active;
@@ -905,6 +1123,20 @@ function showRecordDetails(cfg, record) {
   openDrawer(`${cfg.singular}: ${record.name || record.full_name || record.voucher_no || record.file_no || record.closing_no || "التفاصيل"}`, objectDetails(record, fieldLabels(cfg)) + details + timeline);
 }
 
+async function showRecordAttachments(cfg, record) {
+  const fallbackPaths = (cfg.fields || [])
+    .filter(field => field.type === "file" && record[field.key])
+    .map(field => ({ storage_path: record[field.key], file_name: field.label, mime_type: /image|photo|profile|identity/i.test(field.key) ? "image/*" : "" }));
+  const attachments = await dataService.listEntityAttachments(cfg.table, record.id, fallbackPaths);
+  if (!attachments.length) return toast("لا توجد مرفقات لهذا السجل.", "warning");
+  const files = await Promise.all(attachments.map(async item => ({ ...item, url: await dataService.createAttachmentUrl(item.storage_path) })));
+  const body = `<div class="attachment-viewer">${files.map(item => {
+    const image = String(item.mime_type || "").startsWith("image/");
+    return `<article class="attachment-viewer-card">${image ? `<a href="${escapeHtml(item.url)}" target="_blank" rel="noopener"><img src="${escapeHtml(item.url)}" alt="${escapeHtml(item.file_name)}"></a>` : `<a class="attachment-document" href="${escapeHtml(item.url)}" target="_blank" rel="noopener"><i class="fa-solid fa-file-arrow-down"></i></a>`}<div><strong>${escapeHtml(item.file_name || "مرفق")}</strong><small>${item.size_bytes ? formatFileSize(item.size_bytes) : "ملف محفوظ"}</small></div><a class="secondary-button small-button" href="${escapeHtml(item.url)}" target="_blank" rel="noopener"><i class="fa-solid fa-up-right-from-square"></i> فتح مكبّر</a></article>`;
+  }).join("")}</div>`;
+  openDrawer(`مرفقات ${record.name || record.full_name || record.voucher_no || record.file_no || cfg.singular}`, body);
+}
+
 async function openCancelDialog(cfg, record) {
   openModal({ title: `إلغاء ${cfg.singular}`, eyebrow: "عملية حساسة", body: `<div class="form-field"><label>سبب الإلغاء <span class="required">*</span></label><textarea id="cancel-reason" class="form-control" placeholder="اكتب سبباً واضحاً للإلغاء..."></textarea><span class="help-text">سيحفظ السبب في سجل العمليات، وسيُعكس الأثر المالي أو المخزني عند الحاجة.</span></div>`, footer: `<button class="ghost-button" data-close-modal>تراجع</button><button class="danger-button" id="confirm-cancel"><i class="fa-solid fa-ban"></i> إلغاء السند</button>` });
   document.getElementById("confirm-cancel").addEventListener("click", async () => {
@@ -917,10 +1149,75 @@ async function openCancelDialog(cfg, record) {
   });
 }
 
-function printRecord(cfg, record) {
-  const html = `<!doctype html><html lang="ar" dir="rtl"><head><meta charset="utf-8"><title>${escapeHtml(cfg.singular)}</title><style>body{font-family:Arial,sans-serif;padding:40px;color:#172b45}h1{color:#0f67d8;border-bottom:2px solid #0f67d8;padding-bottom:14px}table{width:100%;border-collapse:collapse}td{border:1px solid #d7e0ea;padding:10px}td:first-child{font-weight:bold;background:#f5f9fd;width:30%}.foot{margin-top:50px;display:flex;justify-content:space-between}</style></head><body><h1>${escapeHtml(config.appName || "نظام الزكاة")} - ${escapeHtml(cfg.singular)}</h1><table>${Object.entries(record).filter(([,v]) => typeof v !== "object").map(([k,v]) => `<tr><td>${escapeHtml(fieldLabels(cfg)[k] || k)}</td><td>${escapeHtml(v ?? "-")}</td></tr>`).join("")}</table><div class="foot"><span>توقيع المستلم: __________</span><span>توقيع المسؤول: __________</span></div><script>window.print();</script></body></html>`;
-  const win = window.open("", "_blank", "width=850,height=950");
-  win.document.write(html); win.document.close();
+function writePrintDocument(win, html) {
+  if (!win) return toast("منع المتصفح نافذة الطباعة. اسمح بالنوافذ المنبثقة لهذا النظام.", "warning");
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+async function loadPrintSettings() {
+  const result = await dataService.list("system_settings", { pageSize: 1 });
+  return result.data[0] || { organization_name: config.appName, system_name: config.appName, logo_url: "assets/logo.svg" };
+}
+
+async function printRecord(cfg, record, preparedWindow = null) {
+  const win = preparedWindow || window.open("", "_blank", "width=920,height=980");
+  try {
+    const settings = await loadPrintSettings();
+    writePrintDocument(win, buildRecordPrintDocument({ table: cfg.table, record, settings, actor: state.session?.profile || {} }));
+  } catch (error) {
+    if (win) win.close();
+    throw error;
+  }
+}
+
+async function printCurrentView() {
+  if (!state.currentRows.length) return toast("لا توجد بيانات للطباعة.", "warning");
+  const win = window.open("", "_blank", "width=1050,height=980");
+  if (win) win.document.write('<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>تجهيز الطباعة</title><body style="font-family:Arial;padding:40px">جاري تجهيز الكشف...</body></html>');
+  try {
+    const settings = await loadPrintSettings();
+    writePrintDocument(win, buildListPrintDocument({
+      title: state.currentPrint.title || els.pageTitle.textContent || "كشف بيانات",
+      columns: state.currentPrint.columns || [],
+      rows: state.currentRows,
+      settings,
+      actor: state.session?.profile || {},
+    }));
+  } catch (error) {
+    if (win) win.close();
+    toast(error.message || "تعذر تجهيز الطباعة.", "error");
+  }
+}
+
+async function printSettingsSample() {
+  const win = window.open("", "_blank", "width=920,height=980");
+  if (win) win.document.write('<!doctype html><html lang="ar" dir="rtl"><meta charset="utf-8"><title>تجهيز نموذج الطباعة</title><body style="font-family:Tahoma,Arial;padding:40px">جاري تجهيز نموذج الطباعة الآمن...</body></html>');
+  try {
+    const settings = await loadPrintSettings();
+    const pendingFooter = document.querySelector('[name="print_footer"]')?.value;
+    if (pendingFooter !== undefined) settings.print_footer = pendingFooter;
+    writePrintDocument(win, buildRecordPrintDocument({
+      table: "cash_receipts",
+      record: {
+        voucher_no: "نموذج طباعة",
+        receipt_date: new Date().toISOString().slice(0, 10),
+        donor_name: "فاعل خير",
+        donor_is_anonymous: true,
+        cashbox_name: "الصندوق الرئيسي",
+        amount: 0,
+        currency: settings.currency || config.currency || "YER",
+        method: "cash",
+        status: "draft",
+      },
+      settings,
+      actor: state.session?.profile || {},
+    }));
+  } catch (error) {
+    if (win) win.close();
+    toast(error.message || "تعذر تجهيز نموذج الطباعة.", "error");
+  }
 }
 
 async function showDuplicateCheck(record) {
@@ -997,6 +1294,7 @@ async function renderReports() {
   const cfg = screenConfigs[cfgKey];
   const data = await dataService.list(reportTable, { pageSize: 200 });
   state.currentRows = data.data;
+  state.currentPrint = { title: active.title, columns: cfg?.columns || [] };
   els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">اختر التقرير ثم استخدم الفلاتر والطباعة أو التصدير.</div><div class="toolbar-actions"><button class="ghost-button" data-export-report><i class="fa-solid fa-file-excel"></i> تصدير Excel/CSV</button><button class="primary-button" data-print-current><i class="fa-solid fa-print"></i> طباعة التقرير</button></div></section>
     <section class="report-selector">${reportDefinitions.map(r => `<button class="report-card ${r.id === state.reportId ? "active" : ""}" data-report="${r.id}"><i class="${r.icon}"></i><strong>${escapeHtml(r.title)}</strong><span>${escapeHtml(r.description)}</span></button>`).join("")}</section>
     <section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="report-search" placeholder="بحث داخل التقرير..."></div><div class="filter-control"><input type="date" id="report-from"></div><div class="filter-control"><input type="date" id="report-to"></div><div class="filter-control"><select id="report-status"><option value="">كل الحالات</option><option value="posted">مرحّل</option><option value="under_review">تحت المراجعة</option><option value="cancelled">ملغي</option></select></div><button class="secondary-button" id="apply-report-filter"><i class="fa-solid fa-filter"></i> تطبيق</button></section>
@@ -1097,20 +1395,20 @@ function backupPreflightMarkup() {
 function renderBackupPanel() {
   const inspection = backupUiState.inspection;
   const restoreInfo = inspection
-    ? '<div class="backup-file-summary"><i class="fa-solid fa-file-shield"></i><span>الملف المفحوص: ' + formatNumber(inspection.totalRows || 0) + ' صف و' + formatNumber(inspection.parts?.length || 0) + ' جزء' + (inspection.legacy ? (inspection.manifest.legacy_source_format === 'zakat-backup-v2' ? ' — V2 محولة وستُطابق بصمتها على الخادم' : ' — V1 قديمة غير موقعة وستظهر كتحذير') : '') + '</span><button class="ghost-button small-button" data-backup-v3-clear aria-label="إزالة الملف المفحوص"><i class="fa-solid fa-xmark"></i></button></div>'
-    : '<p class="muted">يمكن قبول ZIP بصيغة V3 أو نسخة JSON قديمة V1/V2 ليحوّلها النظام إلى أجزاء آمنة قبل الرفع.</p>';
+    ? '<div class="backup-file-summary"><i class="fa-solid fa-file-shield"></i><span>الملف المفحوص: ' + formatNumber(inspection.totalRows || 0) + ' صف و' + formatNumber(inspection.parts?.length || 0) + ' جزء و' + formatNumber(inspection.totalFiles || 0) + ' مرفق' + (inspection.legacy ? (inspection.manifest.legacy_source_format === 'zakat-backup-v2' ? ' — V2 محولة وستُطابق بصمتها على الخادم' : ' — V1 قديمة غير موقعة وستظهر كتحذير') : '') + '</span><button class="ghost-button small-button" data-backup-v3-clear aria-label="إزالة الملف المفحوص"><i class="fa-solid fa-xmark"></i></button></div>'
+    : '<p class="muted">تُقبل نسخة ZIP V4 الكاملة، أو V3/JSON قديمة للتوافق. تفحص البصمات محلياً قبل الاستعادة.</p>';
   const resumeButton = backupUiState.restoreSession && !backupUiState.preflight?.ok
     ? '<button class="secondary-button" data-backup-v3-resume><i class="fa-solid fa-rotate"></i> متابعة من آخر جزء</button>'
     : '';
   return [
     '<section class="backup-v3-shell" data-backup-v3-shell>',
-    '<header class="backup-v3-header"><div><span class="eyebrow">النسخ الاحتياطي V3</span><h3>نسخ متحقق واستعادة مرحلية</h3><p>لا ينتقل النظام كله في طلب واحد؛ كل جزء يتحقق منه ثم يمكن متابعة الجزء الذي انقطع فقط.</p></div><span class="status-badge active"><i class="fa-solid fa-shield-halved"></i> مدير وجهاز معتمد</span></header>',
+    '<header class="backup-v3-header"><div><span class="eyebrow">النسخ الاحتياطي V4</span><h3>البيانات وجميع المرفقات في حزمة متحققة</h3><p>تُفحص بصمة مستقلة لكل جزء ولكل ملف، وتُرفض الحزمة الناقصة، ويمكن متابعة رفع المرفقات بعد انقطاع الشبكة.</p></div><span class="status-badge active"><i class="fa-solid fa-shield-halved"></i> مدير وجهاز معتمد</span></header>',
     '<div id="backup-v3-status" class="backup-v3-status" aria-live="polite" role="status">' + escapeHtml(backupUiState.lastMessage) + '</div>',
     '<div class="backup-v3-grid">',
-    '<article class="backup-step-card"><header><span class="backup-step-number">1</span><div><h4>إنشاء نسخة</h4><p>فحص الحسابات، قراءة أجزاء قصيرة، ثم ZIP مع بصمة لكل جزء.</p></div></header>',
+    '<article class="backup-step-card"><header><span class="backup-step-number">1</span><div><h4>إنشاء نسخة كاملة</h4><p>فحص الحسابات وقراءة أجزاء البيانات وجميع ملفات Storage ثم ZIP موثق.</p></div></header>',
     '<div class="form-field"><label>نطاق النسخة</label><select id="backup-v3-scope" class="form-control"><option value="business">بيانات الأعمال (موصى بها)</option><option value="administrative">نسخة إدارية كاملة</option></select></div>',
     '<label class="backup-check"><input id="backup-v3-consistent" type="checkbox"><span>نسخة متسقة مع إيقاف التعديل مؤقتاً</span><small>يمنع الكتابة فقط حتى تنتهي الجلسة أو تنتهي مهلة الحماية تلقائياً.</small></label>',
-    '<button class="primary-button" data-backup-v3-create><i class="fa-solid fa-download"></i> إنشاء وتنزيل نسخة V3</button>',
+    '<button class="primary-button" data-backup-v3-create><i class="fa-solid fa-download"></i> إنشاء وتنزيل نسخة V4</button>',
     '</article>',
     '<article class="backup-step-card"><header><span class="backup-step-number">2</span><div><h4>فحص ورفع الاستعادة</h4><p>يُفحص الملف محلياً قبل الاتصال، ثم تُرفع أجزاؤه مع قابلية الاستئناف.</p></div></header>',
     '<div class="form-field"><label for="backup-v3-file">ملف النسخة</label><input id="backup-v3-file" class="form-control" type="file" accept=".zip,.json,application/zip,application/json"></div>',
@@ -1120,7 +1418,7 @@ function renderBackupPanel() {
     '</article>',
     '</div>',
     backupPreflightMarkup(),
-    '<aside class="backup-scope-note"><i class="fa-solid fa-circle-info"></i><div><strong>حدود النسخة V3</strong><p>تشمل بيانات التطبيق وسجلاته القابلة للاستعادة. لا تشمل كلمة المرور أو أسرار Gemini أو ملف Supabase Storage الثنائي أو إعدادات Edge Functions. احتفظ أيضاً بنسخة منصة Supabase مستقلة للمشروع الكامل.</p></div></aside>',
+    '<aside class="backup-scope-note"><i class="fa-solid fa-circle-info"></i><div><strong>محتوى نسخة V4</strong><p>تشمل بيانات التطبيق وجميع المرفقات في المخزن الخاص. لا تُصدّر كلمات مرور Auth ولا أسرار Gemini وEdge Functions؛ أعد ضبطها من لوحة Supabase عند نقل المشروع.</p></div></aside>',
     '</section>'
   ].join("");
 }
@@ -1137,6 +1435,7 @@ function setBackupStatus(message, tone = "info") {
 function backupProgressMessage(progress) {
   if (!progress) return "جاري تجهيز العملية...";
   if (progress.phase === "export") return "قراءة " + progress.table + " — الجزء " + progress.partNo + " — " + formatNumber(progress.rows || 0) + " صف.";
+  if (progress.phase === "storage" || progress.phase === "restore-storage" || progress.phase === "cleanup-storage") return progress.message;
   if (progress.phase === "compress") return "تمت قراءة " + formatNumber(progress.rows || 0) + " صف. " + progress.message;
   return progress.message || "جاري المعالجة...";
 }
@@ -1150,17 +1449,18 @@ async function runBackupV3Wizard() {
   const button = document.querySelector("[data-backup-v3-create]");
   if (button) button.disabled = true;
   try {
-    const result = await createV3Archive(dataService, {
+    const result = await createV4Archive(dataService, {
       scope,
       consistent,
       onProgress: progress => setBackupStatus(backupProgressMessage(progress), "info")
     });
-    downloadV3Archive(result);
-    setBackupStatus("اكتملت النسخة: " + formatNumber(result.totalRows) + " صف و" + formatNumber(result.totalParts) + " جزء. تم بدء تنزيل ZIP بعد تحقق البصمات.", "success");
-    toast("اكتملت النسخة الاحتياطية V3 وتم التحقق منها.");
+    downloadV4Archive(result);
+    setBackupStatus("اكتملت النسخة: " + formatNumber(result.totalRows) + " صف و" + formatNumber(result.totalFiles) + " مرفق. بدأ تنزيل ZIP بعد تحقق جميع البصمات.", "success");
+    toast("اكتملت النسخة الاحتياطية V4 بالبيانات والمرفقات.");
   } catch (error) {
-    setBackupStatus(error.message || "تعذر إنشاء النسخة.", "error");
-    toast(error.message || "تعذر إنشاء النسخة.", "error");
+    const failure = formatOperationError(error, "backup");
+    setBackupStatus(failure.message, "error");
+    toast(failure.message, "error");
   } finally {
     backupUiState.busy = false;
     if (button) button.disabled = false;
@@ -1171,7 +1471,11 @@ async function inspectBackupInput(file) {
   if (!file) throw new Error("اختر ملف نسخة ZIP أو JSON أولاً.");
   let inspection;
   if (file.name.toLowerCase().endsWith(".zip")) {
-    inspection = await inspectV3Archive(file);
+    try { inspection = await inspectV4Archive(file); }
+    catch (v4Error) {
+      try { inspection = await inspectV3Archive(file); }
+      catch { throw v4Error; }
+    }
   } else {
     let legacy;
     try { legacy = JSON.parse(await file.text()); } catch { throw new Error("ملف JSON لا يمكن قراءته."); }
@@ -1203,9 +1507,13 @@ async function runRestoreV3Wizard() {
       backupUiState.preflight = null;
     }
     backupUiState.restoreMode = mode;
+    if (inspection.manifest?.format === "zakat-backup-v4") {
+      setBackupStatus("تتم استعادة المرفقات والتحقق منها قبل اعتماد البيانات...", "info");
+      await restoreV4Files(dataService, inspection, { onProgress: progress => setBackupStatus(progress.message, "info") });
+    }
     if (!backupUiState.restoreSession) {
       setBackupStatus("يتم إنشاء جلسة استعادة محمية على الخادم...", "info");
-      backupUiState.restoreSession = await dataService.startRestoreV3(inspection.manifest, mode);
+      backupUiState.restoreSession = await dataService.startRestoreV3(inspection.tableManifest || inspection.manifest, mode);
     }
     const sessionId = backupUiState.restoreSession.session_id;
     const parts = [...inspection.parts].sort((left, right) => left.table.localeCompare(right.table) || left.partNo - right.partNo);
@@ -1222,8 +1530,9 @@ async function runRestoreV3Wizard() {
     await renderSettings("backup");
     setBackupStatus(backupUiState.preflight.ok ? "المعاينة ناجحة. راجع الملخص ثم أكد العملية." : "المعاينة اكتملت مع ملاحظات؛ لن يسمح النظام بالتنفيذ حتى تُحل.", backupUiState.preflight.ok ? "success" : "error");
   } catch (error) {
-    setBackupStatus(error.message || "تعذر فحص أو رفع النسخة.", "error");
-    toast(error.message || "تعذر فحص أو رفع النسخة.", "error");
+    const failure = formatOperationError(error, "restore");
+    setBackupStatus(failure.message, "error");
+    toast(failure.message, "error");
   } finally {
     backupUiState.busy = false;
   }
@@ -1234,7 +1543,7 @@ async function commitRestoreV3Wizard() {
   const exact = backupUiState.restoreMode === "exact";
   const approved = await confirmDialog(
     exact
-      ? "الاستعادة المطابقة ستزيل الزيادات من جداول بيانات الأعمال المُدارة. النظام لا يحذف ملفات المستخدمين أو حسابات Auth، ويحمي جهازك الحالي. ستُغلق الجلسات والإجراءات القديمة المستعادة. هل تريد المتابعة؟"
+      ? "الاستعادة المطابقة ستزيل الزيادات من جداول الأعمال، ثم تنظف ملفات Storage غير الموجودة في النسخة بعد نجاح البيانات فقط. لا تُحذف حسابات Auth ويحمي النظام جهازك الحالي. هل تريد المتابعة؟"
       : "سيُدمج النظام البيانات الجديدة ويحدّث السجلات المطابقة فقط. يعيد الخادم التحقق مرة أخيرة قبل اعتماد أي تغيير. هل تريد المتابعة؟",
     exact ? "تأكيد استعادة مطابقة" : "تأكيد دمج آمن",
     exact ? "متابعة إلى عبارة التأكيد" : "تنفيذ الدمج",
@@ -1250,7 +1559,14 @@ async function commitRestoreV3Wizard() {
   setBackupStatus("يتم تنفيذ الاستعادة داخل معاملة واحدة. لا تغلق الصفحة حتى تظهر النتيجة.", "info");
   try {
     const result = await dataService.commitRestoreV3(backupUiState.restoreSession.session_id, confirmation);
-    backupUiState.lastMessage = "نجحت الاستعادة: " + formatNumber(result.restored_rows || 0) + " صف. تم تسجيل تقرير العملية في التدقيق.";
+    let removedFiles = 0;
+    if (exact && backupUiState.inspection?.manifest?.format === "zakat-backup-v4") {
+      const cleanup = await cleanupExactV4Files(dataService, backupUiState.inspection, progress => setBackupStatus(progress.message, "info"));
+      removedFiles = cleanup.removed;
+    } else {
+      clearV4Resume(backupUiState.inspection);
+    }
+    backupUiState.lastMessage = "نجحت الاستعادة: " + formatNumber(result.restored_rows || 0) + " صف" + (exact ? "، ونُظف " + formatNumber(removedFiles) + " ملف زائد" : "") + ". تم تسجيل تقرير العملية في التدقيق.";
     backupUiState.inspection = null;
     backupUiState.restoreSession = null;
     backupUiState.stagedParts = new Set();
@@ -1258,7 +1574,8 @@ async function commitRestoreV3Wizard() {
     await renderSettings("backup");
     toast("تمت الاستعادة بنجاح وفُحص التكامل المالي.");
   } catch (error) {
-    const message = (error.message || "فشلت الاستعادة وتراجع الخادم عن العملية.") + " ابدأ جلسة استعادة جديدة من الملف المفحوص.";
+    const failure = formatOperationError(error, "restore");
+    const message = failure.message + " ابدأ جلسة استعادة جديدة من الملف المفحوص.";
     backupUiState.restoreSession = null;
     backupUiState.stagedParts = new Set();
     backupUiState.preflight = null;
@@ -1271,20 +1588,120 @@ async function commitRestoreV3Wizard() {
   }
 }
 
+function applyFontScale(value) {
+  const percent = Math.max(80, Math.min(140, Number(value) || 100));
+  document.documentElement.style.setProperty("--font-scale", String(percent / 100));
+  try { localStorage.setItem("zakat_font_scale_percent", String(percent)); } catch {                                                      }
+}
+
+function storageMeter(label, used, limit) {
+  const safeUsed = healthMetric({ used }, "used");
+  const safeLimit = Math.max(1, Number(limit) || 1);
+  if (safeUsed === null) return `<article class="system-meter is-unavailable"><header><span>${escapeHtml(label)}</span><i class="fa-solid fa-circle-question" aria-hidden="true"></i></header><strong>القياس غير متاح</strong><p>يظهر الاستخدام والمتبقي بعد نجاح الاتصال والفحص.</p><small>الحد المدخل: ${formatFileSize(safeLimit)}</small></article>`;
+  const remaining = Math.max(0, safeLimit - safeUsed);
+  const percent = Math.min(100, Math.round((safeUsed / safeLimit) * 100));
+  return `<article class="system-meter"><header><span>${escapeHtml(label)}</span><strong>${percent}%</strong></header><div class="progress"><span style="width:${percent}%"></span></div><div><small>المستخدم: ${formatFileSize(safeUsed)}</small><small>المتبقي: ${formatFileSize(remaining)}</small><small>الحد المدخل: ${formatFileSize(safeLimit)}</small></div></article>`;
+}
+
+function systemHealthMarkup(settings, health) {
+  const databaseLimit = Number(settings.supabase_database_limit_mb || 500) * 1024 * 1024;
+  const storageLimit = Number(settings.supabase_storage_limit_mb || 1024) * 1024 * 1024;
+  const missingFiles = healthMetric(health, "missing_attachment_files");
+  const integrityOk = missingFiles === 0;
+  const queueCount = getOfflineQueue().filter(item => ["queued", "failed"].includes(item.status)).length;
+  const connection = getConnectionState();
+  const lastActivity = health.last_application_activity_at || connection.lastSuccessAt || null;
+  const lastActivityTime = lastActivity ? new Date(lastActivity).getTime() : NaN;
+  const idleDays = Number.isFinite(lastActivityTime) ? Math.max(0, Math.floor((Date.now() - lastActivityTime) / 86400000)) : null;
+  const pauseTone = idleDays !== null && idleDays >= 5 ? "text-warning" : "text-success";
+  const financialFailures = healthMetric(health, "financial_integrity_failures");
+  const financialLabel = financialFailures === null ? "لم يكتمل الفحص" : financialFailures === 0 ? "كل الفحوص متوازنة" : formatNumber(financialFailures) + " فحصًا يحتاج مراجعة";
+  const financialTone = financialFailures === null ? "text-warning" : financialFailures === 0 ? "text-success" : "text-danger";
+  const countLabel = key => healthMetric(health, key) === null ? "غير متاح" : formatNumber(healthMetric(health, key));
+  const errors = [...(Array.isArray(health.diagnostic_errors) ? health.diagnostic_errors : [])];
+  if (health.diagnostic_error) errors.unshift({ message: health.diagnostic_error, code: health.diagnostic_code });
+  const errorMarkup = errors.map(error => {
+    const issue = describeHealthError(error);
+    return `<div class="health-issue" role="status"><i class="fa-solid fa-circle-exclamation" aria-hidden="true"></i><div><strong>لم يكتمل أحد الفحوص</strong><p>${escapeHtml(issue.action)}</p><details><summary>عرض سبب الخطأ</summary><p dir="auto">${escapeHtml(issue.detail)}</p>${issue.code ? `<code>${escapeHtml(issue.code)}</code>` : ""}</details></div></div>`;
+  }).join("");
+  const schemaMissing = healthMetric(health, "schema_missing_objects");
+  return [
+    `<header class="health-heading"><div><span class="eyebrow blue"><i class="fa-solid fa-heart-pulse" aria-hidden="true"></i> متابعة التشغيل</span><h3>حالة النظام</h3><p>المساحة، الحسابات، المرفقات، وآخر نشاط مسجل.</p></div><button class="secondary-button" data-settings-tab="system"><i class="fa-solid fa-arrows-rotate" aria-hidden="true"></i> تحديث الحالة</button></header>`,
+    '<p>حدود المساحة مرجعية تُدخل من الإعدادات؛ استهلاك نقل البيانات والفوترة يعرضان في لوحة مشروع Supabase.</p>',
+    health.demo ? '<div class="info-callout"><i class="fa-solid fa-flask"></i><span>وضع العرض: هذه معلومات محلية، ولا تمثل قياسات مشروع Supabase.</span></div>' : '',
+    health.offline ? '<div class="info-callout"><i class="fa-solid fa-wifi"></i><span>أنت تعمل دون اتصال. ستظهر القياسات الحية عند عودة الاتصال ونجاح الفحص.</span></div>' : '',
+    errorMarkup,
+    '<div class="system-health-grid">',
+    storageMeter('مساحة قاعدة البيانات', health.database_bytes, databaseLimit),
+    storageMeter('مساحة المرفقات', health.storage_bytes, storageLimit),
+    '</div>',
+    '<div class="detail-grid system-details">',
+    `<div class="detail-item"><span>الإصدار</span><strong>${escapeHtml(config.version || "12.5.0")} — ${escapeHtml(config.releaseName || "")}</strong></div>`,
+    `<div class="detail-item"><span>اتصال Supabase</span><strong>${dataService.demoMode ? "عرض محلي" : health.offline ? "غير متصل" : health.live_unavailable ? "تعذر إكمال الطلب" : "تم جلب الحالة"}</strong></div>`,
+    `<div class="detail-item"><span>الجهاز الحالي</span><strong>${escapeHtml(getDeviceName())} — ${state.session ? (dataService.demoMode ? "محلي" : "معتمد للجلسة") : "دون جلسة"}</strong></div>`,
+    `<div class="detail-item"><span>ملفات Storage</span><strong>${countLabel("storage_objects")}</strong></div>`,
+    `<div class="detail-item"><span>سجلات المرفقات</span><strong>${countLabel("attachment_records")}</strong></div>`,
+    `<div class="detail-item"><span>سلامة المرفقات</span><strong class="${missingFiles === null ? "text-warning" : integrityOk ? "text-success" : "text-danger"}">${missingFiles === null ? "لم يكتمل الفحص" : integrityOk ? "لا توجد ملفات مفقودة" : formatNumber(missingFiles) + " سجلًا بلا ملف"}</strong></div>`,
+    `<div class="detail-item"><span>سلامة الحسابات</span><strong class="${financialTone}">${financialLabel}</strong></div>`,
+    `<div class="detail-item"><span>اكتمال قاعدة البيانات</span><strong class="${schemaMissing === null ? "text-warning" : schemaMissing === 0 ? "text-success" : "text-danger"}">${schemaMissing === null ? "لم يكتمل الفحص" : schemaMissing === 0 ? "الجداول والعروض المطلوبة موجودة" : formatNumber(schemaMissing) + " عنصرًا يحتاج إصلاحًا"}</strong></div>`,
+    `<div class="detail-item"><span>ملفات غير مرتبطة</span><strong>${countLabel("orphan_storage_files")}</strong></div>`,
+    `<div class="detail-item"><span>البيانات المحلية المجلوبة</span><strong>${formatFileSize(health.cache_bytes || 0)}</strong></div>`,
+    `<div class="detail-item"><span>مساحة الجهاز المستخدمة للتطبيق</span><strong>${formatFileSize(health.device_storage_used_bytes || 0)}</strong></div>`,
+    `<div class="detail-item"><span>مساحة الجهاز المتاحة تقديريًا</span><strong>${health.device_storage_quota_bytes ? formatFileSize(Math.max(0, health.device_storage_quota_bytes - (health.device_storage_used_bytes || 0))) : "غير متاحة من المتصفح"}</strong></div>`,
+    `<div class="detail-item"><span>عمليات تنتظر المزامنة</span><strong>${formatNumber(queueCount)}</strong></div>`,
+    `<div class="detail-item"><span>المساعد الذكي</span><strong>${config.edgeFunctions?.geminiAssistant ? "مهيأ عبر دالة آمنة" : "غير مهيأ"}</strong></div>`,
+    `<div class="detail-item"><span>آخر نسخة احتياطية</span><strong>${health.last_backup_at ? formatDate(health.last_backup_at) : Object.hasOwn(health,"last_backup_at") ? "لا يوجد سجل" : "غير متاح"}</strong></div>`,
+    `<div class="detail-item"><span>آخر استعادة</span><strong>${health.last_restore_at ? formatDate(health.last_restore_at) : Object.hasOwn(health,"last_restore_at") ? "لا يوجد سجل" : "غير متاح"}</strong></div>`,
+    `<div class="detail-item"><span>وقت الفحص</span><strong>${health.measured_at ? formatDate(health.measured_at,true) : "غير متاح"}</strong></div>`,
+    `<div class="detail-item"><span>آخر نشاط حقيقي مسجل</span><strong class="${pauseTone}">${lastActivity ? formatDate(lastActivity) + (idleDays !== null ? ` — منذ ${formatNumber(idleDays)} يوم` : "") : "لا يوجد سجل بعد"}</strong></div>`,
+    '</div>'
+  ].join("");
+}
+
+function releaseNotesMarkup() {
+  return [
+    `<header class="release-notes-header"><div><h3>سجل الإصدارات</h3><p>ما أضيف وما تغير في كل نسخة، لتسهيل التحقق والدعم.</p></div><span class="status-badge active">الإصدار الحالي ${escapeHtml(config.version || "12.5.0")}</span></header>`,
+    '<div class="release-timeline">',
+    ...RELEASE_NOTES.map(release => `<article class="release-card"><header><div><span class="release-version">${escapeHtml(release.version)}</span><h4>${escapeHtml(release.name)}</h4></div><div><span class="status-badge ${release.status === "الحالي" ? "active" : "draft"}">${escapeHtml(release.status)}</span><small>${escapeHtml(release.date)}</small></div></header>${release.groups.map(group => `<section><h5>${escapeHtml(group.title)}</h5><ul>${group.items.map(item => `<li>${escapeHtml(item)}</li>`).join("")}</ul></section>`).join("")}</article>`),
+    '</div>'
+  ].join("");
+}
+
+let settingsRenderRevision = 0;
 async function renderSettings(tab = "general") {
-  const settingsResult = await dataService.list("system_settings", { pageSize: 1 });
-  const s = settingsResult.data[0] || {};
+  const revision = ++settingsRenderRevision;
   const nav = [
     ["general", "fa-solid fa-sliders", "الإعدادات العامة"], ["policies", "fa-solid fa-shield-halved", "سياسات العمل"],
-    ["printing", "fa-solid fa-print", "الطباعة"], ["backup", "fa-solid fa-database", "النسخ الاحتياطي"], ["system", "fa-solid fa-circle-info", "حالة النظام"]
+    ["printing", "fa-solid fa-print", "الطباعة"], ["backup", "fa-solid fa-database", "النسخ الاحتياطي"], ["system", "fa-solid fa-circle-info", "حالة النظام"],
+    ["releases", "fa-solid fa-clock-rotate-left", "الإصدارات"]
   ];
+  const shell = panel => `<section class="page-toolbar"><div class="page-description">إدارة الخيارات العامة والنسخ الاحتياطي وفق صلاحية مدير النظام.</div></section><section class="settings-layout"><nav class="settings-nav">${nav.map(x => `<button class="${tab === x[0] ? "active" : ""}" data-settings-tab="${x[0]}"><i class="${x[1]}"></i>${x[2]}</button>`).join("")}</nav><article class="settings-panel">${panel}</article></section>`;
+  els.pageContent.innerHTML = shell('<div class="empty-state" role="status"><i class="fa-solid fa-circle-notch fa-spin" aria-hidden="true"></i><h3>جارٍ تحميل المعلومات</h3></div>');
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), 7000);
+  const [settingsRead, healthRead] = await Promise.allSettled([
+    dataService.list("system_settings", { pageSize: 1, signal: controller.signal }),
+    tab === "system" ? dataService.getSystemHealth() : Promise.resolve(null),
+  ]);
+  clearTimeout(timer);
+  if (revision !== settingsRenderRevision || state.currentScreen !== "settings") return;
+  const s = settingsRead.status === "fulfilled" ? settingsRead.value.data?.[0] || {} : {};
+  const settingsUnavailable = !s.id;
+  let savedScale = 110;
+  try { savedScale = localStorage.getItem("zakat_font_scale_percent") || 110; } catch {                                   }
+  applyFontScale(s.font_scale_percent || savedScale);
+  const health = healthRead.status === "fulfilled" ? healthRead.value : { live_unavailable: true, diagnostic_error: healthRead.reason?.message || "تعذر جلب الحالة" };
+  const settingsIssue = settingsUnavailable ? describeHealthError(settingsRead.reason || { message: "لم يتم تحميل سجل الإعدادات. تحقق من الاتصال واكتمال تثبيت قاعدة البيانات." }) : null;
+  const settingsNotice = settingsIssue ? `<div class="health-issue" role="status"><i class="fa-solid fa-circle-exclamation"></i><div><strong>تعذر تحميل الإعدادات المحفوظة</strong><p>${escapeHtml(settingsIssue.action)}</p><details><summary>عرض السبب</summary><p dir="auto">${escapeHtml(settingsIssue.detail)}</p></details><button class="text-button" data-settings-tab="${escapeHtml(tab)}">إعادة المحاولة</button></div></div>` : "";
   let panel = "";
-  if (tab === "general") panel = `<h3>الإعدادات العامة</h3><p>هوية النظام والعملات وصيغة أرقام السندات.</p><form id="settings-form" class="form-grid"><div class="form-field"><label>اسم الجهة</label><input class="form-control" name="organization_name" value="${escapeHtml(s.organization_name || "")}"></div><div class="form-field"><label>اسم النظام</label><input class="form-control" name="system_name" value="${escapeHtml(s.system_name || "")}"></div><div class="form-field"><label>العملة الافتراضية</label><select class="form-control" name="currency"><option value="YER" ${s.currency === "YER" ? "selected" : ""}>ريال يمني</option><option value="SAR" ${s.currency === "SAR" ? "selected" : ""}>ريال سعودي</option><option value="USD" ${s.currency === "USD" ? "selected" : ""}>دولار أمريكي</option></select></div><div class="form-field"><label>سنوات الاحتفاظ بالبيانات</label><input class="form-control" type="number" name="retention_years" value="${s.retention_years || 10}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>`;
+  if (tab === "general") panel = `<h3>الإعدادات العامة</h3><p>هوية النظام، ضغط المرفقات، حجم الخط، وحدود مساحة مشروع Supabase.</p><form id="settings-form" class="form-grid"><div class="form-field"><label>اسم الجهة</label><input class="form-control" name="organization_name" value="${escapeHtml(s.organization_name || "")}"></div><div class="form-field"><label>اسم النظام</label><input class="form-control" name="system_name" value="${escapeHtml(s.system_name || "")}"></div><div class="form-field"><label>العملة الافتراضية</label><select class="form-control" name="currency"><option value="YER" ${s.currency === "YER" ? "selected" : ""}>ريال يمني</option><option value="SAR" ${s.currency === "SAR" ? "selected" : ""}>ريال سعودي</option><option value="USD" ${s.currency === "USD" ? "selected" : ""}>دولار أمريكي</option></select></div><div class="form-field"><label>سنوات الاحتفاظ بالبيانات</label><input class="form-control" type="number" min="1" max="100" name="retention_years" value="${s.retention_years || 10}"></div><div class="form-field"><label>حجم الصورة الشخصية بعد الضغط (KB)</label><input class="form-control" type="number" min="40" max="2048" name="profile_image_max_kb" value="${s.profile_image_max_kb || 120}"><span class="help-text">الموصى به 120KB.</span></div><div class="form-field"><label>حجم صورة الوثيقة بعد الضغط (KB)</label><input class="form-control" type="number" min="40" max="4096" name="document_image_max_kb" value="${s.document_image_max_kb || 350}"><span class="help-text">الموصى به 350KB لوضوح النص.</span></div><div class="form-field"><label>أقصى حجم أصلي للمرفق (MB)</label><input class="form-control" type="number" min="1" max="50" name="attachment_original_max_mb" value="${s.attachment_original_max_mb || 8}"></div><div class="form-field"><label>حجم خط الواجهة (%)</label><input class="form-control" type="number" min="80" max="140" step="5" name="font_scale_percent" value="${s.font_scale_percent || 110}"></div><div class="form-field"><label>حد قاعدة بيانات Supabase (MB)</label><input class="form-control" type="number" min="100" name="supabase_database_limit_mb" value="${s.supabase_database_limit_mb || 500}"></div><div class="form-field"><label>حد Storage في Supabase (MB)</label><input class="form-control" type="number" min="100" name="supabase_storage_limit_mb" value="${s.supabase_storage_limit_mb || 1024}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ الإعدادات</button></div>`;
   else if (tab === "policies") panel = `<h3>سياسات العمل والتحقق</h3><p>يمكن تغيير هذه الخيارات دون تعديل الكود.</p><form id="settings-form" class="form-grid"><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الصرف يحتاج اعتماداً</strong><small>تُحفظ سندات الموزعين تحت المراجعة قبل الترحيل.</small></div><label class="switch"><input name="require_payment_approval" type="checkbox" ${s.require_payment_approval ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل التلقائي لكل العمليات</strong><small>بعد الحفظ يتم الترحيل عند وجود اتصال وبعد فحص الرصيد والصلاحيات؛ المسودة غير المتصلة تُزامن أولاً ثم تنتظر الترحيل الآمن.</small></div><label class="switch"><input name="auto_post_all_operations" type="checkbox" ${s.auto_post_all_operations ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>السماح بالمسودات دون اتصال</strong><small>يحفظ النظام المسودة محلياً ويرسلها عند عودة الشبكة.</small></div><label class="switch"><input name="allow_offline_drafts" type="checkbox" ${s.allow_offline_drafts ? "checked" : ""}><span class="switch-slider"></span></label></div></div><div class="form-field full"><div class="switch-field"><div class="switch-copy"><strong>الترحيل النهائي دون اتصال</strong><small>غير متاح أمنياً؛ يجب أن يعيد الخادم فحص الرصيد والتكرار لحظة الترحيل.</small></div><label class="switch"><input name="allow_final_offline" type="checkbox" disabled><span class="switch-slider"></span></label></div></div><div class="form-field"><label>طريقة الترحيل والمزامنة</label><select class="form-control" name="sync_mode"><option value="automatic" ${s.sync_mode !== "manual" ? "selected" : ""}>تلقائية عند عودة الإنترنت</option><option value="manual" ${s.sync_mode === "manual" ? "selected" : ""}>يدوية من شاشة المزامنة</option></select></div><div class="form-field"><label>عدد محاولات الدخول</label><input class="form-control" name="max_login_attempts" type="number" min="1" max="20" value="${s.max_login_attempts || 5}"></div><div class="form-field"><label>مدة الإيقاف المؤقت بالدقائق</label><input class="form-control" name="lockout_minutes" type="number" min="1" max="1440" value="${s.lockout_minutes || 15}"></div><div class="form-field"><label>تنبيه الصلاحية قبل</label><input class="form-control" name="stock_alert_days" type="number" value="${s.stock_alert_days || 30}"></div></form><div style="display:flex;justify-content:flex-end;margin-top:18px"><button class="primary-button" data-save-settings><i class="fa-solid fa-floppy-disk"></i> حفظ السياسات</button></div>`;
-  else if (tab === "printing") panel = `<h3>إعدادات الطباعة</h3><p>تخصيص النصوص التي تظهر في السندات والتقارير.</p><form id="settings-form" class="form-grid"><div class="form-field full"><label>تذييل الطباعة</label><textarea class="form-control" name="print_footer">${escapeHtml(s.print_footer || "")}</textarea></div></form><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="ghost-button" onclick="window.print()"><i class="fa-solid fa-print"></i> اختبار الطباعة</button><button class="primary-button" data-save-settings>حفظ</button></div>`;
+  else if (tab === "printing") panel = `<h3>إعدادات الطباعة</h3><p>تخصيص النصوص التي تظهر في السندات والتقارير.</p><form id="settings-form" class="form-grid"><div class="form-field full"><label>تذييل الطباعة</label><textarea class="form-control" name="print_footer">${escapeHtml(s.print_footer || "")}</textarea></div></form><div style="display:flex;justify-content:flex-end;gap:8px;margin-top:18px"><button class="ghost-button" data-test-print><i class="fa-solid fa-print"></i> اختبار الطباعة</button><button class="primary-button" data-save-settings>حفظ</button></div>`;
   else if (tab === "backup") panel = renderBackupPanel();
-  else panel = `<h3>حالة النظام</h3><p>صفحة تشخيص توضح بيئة التشغيل والاتصال والمزامنة والإصدار؛ لا تغيّر البيانات.</p><div class="detail-grid"><div class="detail-item"><span>الإصدار</span><strong>${escapeHtml(config.version || "12.2.0")} — ${escapeHtml(config.releaseName || "")}</strong></div><div class="detail-item"><span>وضع التشغيل</span><strong>${dataService.demoMode ? "عرض تجريبي محلي" : "Supabase متصل"}</strong></div><div class="detail-item"><span>حالة الشبكة</span><strong>${isOnline() ? "متصل" : "غير متصل"}</strong></div><div class="detail-item"><span>عمليات تنتظر المزامنة</span><strong>${getOfflineQueue().filter(x => ["queued","failed"].includes(x.status)).length}</strong></div><div class="detail-item"><span>الواجهة</span><strong>HTML + CSS + JavaScript</strong></div><div class="detail-item"><span>النشر</span><strong>جاهز لـ Vercel</strong></div><div class="detail-item full"><span>ملاحظة أمنية</span><strong>مفتاح الواجهة anon/publishable فقط، والحماية الفعلية عبر RLS والدوال المقيدة.</strong></div></div>`;
-  els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">إدارة الخيارات العامة والنسخ الاحتياطي وفق صلاحية مدير النظام.</div></section><section class="settings-layout"><nav class="settings-nav">${nav.map(x => `<button class="${tab === x[0] ? "active" : ""}" data-settings-tab="${x[0]}"><i class="${x[1]}"></i>${x[2]}</button>`).join("")}</nav><article class="settings-panel">${panel}</article></section>`;
+  else if (tab === "releases") panel = releaseNotesMarkup();
+  else panel = systemHealthMarkup(s, health || {});
+  els.pageContent.innerHTML = shell(settingsNotice + panel);
+  if (settingsUnavailable) els.pageContent.querySelectorAll("#settings-form input,#settings-form select,#settings-form textarea,[data-save-settings]").forEach(control => { control.disabled = true; });
 }
 
 async function saveSettings() {
@@ -1298,6 +1715,8 @@ async function saveSettings() {
   });
   await dataService.update("system_settings", current.id, payload);
   if (payload.sync_mode) localStorage.setItem("zakat_sync_mode", payload.sync_mode);
+  if (payload.font_scale_percent) applyFontScale(payload.font_scale_percent);
+  scheduleNotificationRefresh();
   toast("تم حفظ الإعدادات.");
 }
 
@@ -1382,7 +1801,6 @@ async function openImportDialog(targetTable = "") {
     }
   });
 }
-
 
 async function openQuickDelivery() {
   if (!roleCanWrite("distribution_assignments", "create")) return toast("لا يملك دورك الحالي صلاحية تنفيذ التسليم السريع.", "error");
@@ -1544,6 +1962,7 @@ async function restoreBackupFile(file) {
 
 async function refreshCurrentScreen() {
   await navigate(state.currentScreen, false);
+  scheduleNotificationRefresh();
 }
 
 function updateConnectionStatus() {
@@ -1568,6 +1987,119 @@ function updateQueueBadge() {
   badge.classList.toggle("hidden", !count);
 }
 
+function updateNotificationBadge() {
+  const badge = document.getElementById("notifications-badge");
+  if (!badge) return;
+  const count = notificationCount(state.notifications);
+  badge.textContent = count > 99 ? "99+" : String(count);
+  badge.classList.toggle("hidden", count === 0);
+  badge.setAttribute("aria-label", count ? `${count} تنبيه` : "لا توجد تنبيهات");
+}
+
+function notificationQuerySpecs() {
+  const specs = [];
+  const add = (key, table, options = {}) => specs.push({ key, promise: dataService.list(table, options) });
+  if (canAccess("inventory") || canAccess("stock-balances")) {
+    add("items", "items", { pageSize: 1000 });
+    add("inventoryLots", "inventory_lots", { pageSize: 1000 });
+  }
+  if (canAccess("beneficiaries")) add("beneficiaries", "beneficiaries", { pageSize: 1000 });
+  if (state.session?.profile?.role === "admin") add("devices", "authorized_devices", { filters: { status: "pending" }, pageSize: 250 });
+  if (canAccess("settings")) add("settings", "system_settings", { pageSize: 1 });
+  [
+    ["cash-receipts", "cash_receipts"],
+    ["cash-payments", "cash_payments"],
+    ["in-kind-receipts", "in_kind_receipts"],
+    ["in-kind-payments", "in_kind_payments"]
+  ].forEach(([screen, table]) => {
+    if (canAccess(screen)) add(`pending:${table}`, table, { filters: { status: "under_review" }, pageSize: 250 });
+  });
+  return specs;
+}
+
+async function loadNotificationSnapshot() {
+  const specs = notificationQuerySpecs();
+  const settled = await Promise.allSettled(specs.map(spec => spec.promise));
+  const loaded = {};
+  const pendingDocuments = [];
+  settled.forEach((result, index) => {
+    const key = specs[index].key;
+    if (result.status === "rejected") {
+      console.warn(`تعذر تحديث مصدر التنبيهات ${key}`, result.reason);
+      return;
+    }
+    const rows = result.value?.data || [];
+    if (key.startsWith("pending:")) pendingDocuments.push(...rows);
+    else loaded[key] = rows;
+  });
+  return {
+    online: isOnline(),
+    alertDays: loaded.settings?.[0]?.stock_alert_days || 30,
+    items: loaded.items || [],
+    inventoryLots: loaded.inventoryLots || [],
+    pendingDocuments,
+    beneficiaries: loaded.beneficiaries || [],
+    devices: loaded.devices || [],
+    queue: getOfflineQueue()
+  };
+}
+
+function renderNotificationDrawer() {
+  const body = document.getElementById("drawer-body");
+  if (!body) return;
+  body.innerHTML = state.notificationLoading && !state.notificationsLoaded
+    ? `<div class="notification-loading"><span class="spinner"></span><p>جاري فحص التنبيهات المسموحة لك...</p></div>`
+    : renderNotificationList(state.notifications, escapeHtml);
+}
+
+let notificationRefreshPromise = null;
+async function refreshNotifications({ updateDrawer = false } = {}) {
+  if (!state.session) return;
+  if (notificationRefreshPromise) {
+    await notificationRefreshPromise;
+    if (updateDrawer) renderNotificationDrawer();
+    return;
+  }
+  const profileId = String(state.session.profile?.id || state.session.user?.id || "");
+  state.notificationLoading = true;
+  document.getElementById("notifications-button")?.classList.add("is-loading");
+  if (updateDrawer) renderNotificationDrawer();
+  try {
+    notificationRefreshPromise = loadNotificationSnapshot();
+    const snapshot = await notificationRefreshPromise;
+    const currentProfileId = String(state.session?.profile?.id || state.session?.user?.id || "");
+    if (currentProfileId && currentProfileId === profileId) {
+      state.notifications = buildNotifications(snapshot);
+      state.notificationsLoaded = true;
+      updateNotificationBadge();
+    }
+  } finally {
+    notificationRefreshPromise = null;
+    state.notificationLoading = false;
+    document.getElementById("notifications-button")?.classList.remove("is-loading");
+    if (updateDrawer) renderNotificationDrawer();
+  }
+}
+
+let notificationRefreshTimer;
+function scheduleNotificationRefresh() {
+  clearTimeout(notificationRefreshTimer);
+  notificationRefreshTimer = setTimeout(() => {
+    refreshNotifications().catch(error => console.warn("تعذر تحديث مركز التنبيهات", error));
+  }, 240);
+}
+
+async function openNotifications() {
+  openDrawer("مركز التنبيهات", state.notificationsLoaded
+    ? renderNotificationList(state.notifications, escapeHtml)
+    : `<div class="notification-loading"><span class="spinner"></span><p>جاري فحص التنبيهات المسموحة لك...</p></div>`);
+  await refreshNotifications({ updateDrawer: true }).catch(error => {
+    console.warn("تعذر فتح مركز التنبيهات", error);
+    const body = document.getElementById("drawer-body");
+    if (body && !state.notificationsLoaded) body.innerHTML = `<div class="notification-empty error"><span><i class="fa-solid fa-triangle-exclamation"></i></span><h3>تعذر تحديث التنبيهات</h3><p>تحقق من الاتصال ثم حاول مرة أخرى.</p></div>`;
+  });
+}
+
 function openCommandPalette() {
   const root = document.getElementById("command-palette");
   root.classList.remove("hidden"); root.setAttribute("aria-hidden", "false");
@@ -1588,6 +2120,8 @@ function renderCommandResults(query) {
 
 async function handleGlobalClick(event) {
   if (state.currentScreen === "ai-assistant" && await handleAssistantInteraction(event, els.pageContent, dataService, state.session)) return;
+  const notificationNav = event.target.closest("[data-notification-nav]");
+  if (notificationNav) { closeDrawer(); return navigate(notificationNav.dataset.notificationNav); }
   const nav = event.target.closest("[data-nav]");
   if (nav) return navigate(nav.dataset.nav);
   const commandNav = event.target.closest("[data-command-nav]");
@@ -1620,7 +2154,7 @@ async function handleGlobalClick(event) {
   const report = event.target.closest("[data-report]");
   if (report) { state.reportId = report.dataset.report; return renderReports(); }
   if (event.target.closest("[data-refresh-table]")) return refreshCurrentScreen();
-  if (event.target.closest("[data-print-current]")) return window.print();
+  if (event.target.closest("[data-print-current]")) return printCurrentView();
   if (event.target.closest("[data-export-current]")) return exportRows(state.currentRows, `${state.currentConfig?.table || "data"}.csv`);
   if (event.target.closest("[data-export-report]")) return exportRows(state.currentRows, `${state.reportId}.csv`);
   if (event.target.closest("#apply-report-filter")) return applyReportFilter();
@@ -1628,7 +2162,7 @@ async function handleGlobalClick(event) {
     const btn = event.target.closest("[data-sync-now]"); btn.disabled = true;
     try { const result = await dataService.syncQueue(); toast(`نجحت ${result.synced} عملية، وفشلت ${result.failed}.`, result.failed ? "warning" : "success"); }
     catch (error) { toast(error.message, "error"); }
-    finally { updateQueueBadge(); renderSync(); }
+    finally { updateQueueBadge(); scheduleNotificationRefresh(); renderSync(); }
     return;
   }
   const removeQueue = event.target.closest("[data-remove-queue]");
@@ -1636,6 +2170,7 @@ async function handleGlobalClick(event) {
   if (event.target.closest("[data-clear-synced]")) { clearCompletedQueue(); updateQueueBadge(); return renderSync(); }
   const settingsTab = event.target.closest("[data-settings-tab]");
   if (settingsTab) return renderSettings(settingsTab.dataset.settingsTab);
+  if (event.target.closest("[data-test-print]")) { await printSettingsSample(); return; }
   if (event.target.closest("[data-save-settings]")) { try { await saveSettings(); } catch (error) { toast(error.message, "error"); } return; }
   if (event.target.closest("[data-backup-v3-create]")) { await runBackupV3Wizard(); return; }
   if (event.target.closest("[data-backup-v3-restore]") || event.target.closest("[data-backup-v3-resume]")) { await runRestoreV3Wizard(); return; }
@@ -1667,11 +2202,15 @@ function bindEvents() {
   window.addEventListener("popstate", () => navigate(location.hash.replace("#", "") || "dashboard", false));
   subscribeConnection(({ online }) => {
     const wasOffline = document.body.classList.contains("is-offline");
+    const connectionChanged = wasOffline !== !online;
     updateConnectionStatus();
     updateQueueBadge();
+    if (connectionChanged) scheduleNotificationRefresh();
     if (wasOffline && online) toast("عاد الاتصال الفعلي بالخادم.", "info");
   });
-  window.addEventListener("zakat:queue-change", updateQueueBadge);
+  window.addEventListener("zakat:queue-change", () => { updateQueueBadge(); scheduleNotificationRefresh(); });
+  window.addEventListener("zakat:data-change", scheduleNotificationRefresh);
+  window.addEventListener("zakat:charts-ready", () => { if (state.currentScreen === "dashboard" && state.session) renderDashboard(); });
   window.addEventListener("zakat:assistant-ui-command", event => {
     const command = event.detail || {};
     if (command.type === "navigate" && typeof command.screen_id === "string") {
@@ -1683,7 +2222,7 @@ function bindEvents() {
   document.getElementById("quick-search").addEventListener("click", openCommandPalette);
   document.getElementById("command-search-input").addEventListener("input", e => renderCommandResults(e.target.value));
   document.getElementById("sync-button").addEventListener("click", () => navigate("sync"));
-  document.getElementById("notifications-button").addEventListener("click", () => toast("لديك تنبيهات مخزون وعمليات معلقة في لوحة التحكم.", "info"));
+  document.getElementById("notifications-button").addEventListener("click", openNotifications);
   document.getElementById("user-button").addEventListener("click", () => openProfileMenu());
   document.getElementById("profile-menu-button").addEventListener("click", () => openProfileMenu());
   document.addEventListener("keydown", e => {
@@ -1751,12 +2290,13 @@ function openProfileMenu() {
 
 async function init() {
   document.getElementById("current-year").textContent = new Date().getFullYear();
+  applyFontScale(localStorage.getItem("zakat_font_scale_percent") || 110);
   if (!dataService.demoMode) document.getElementById("demo-login-note").classList.add("hidden");
   bindEvents();
-await checkConnectivity({ timeout: 6500, silent: true });
   await dataService.initialize();
   state.session = await dataService.getSession();
   if (state.session) showApp(); else showLogin();
+  checkConnectivity({ timeout: 2500, silent: true }).catch(() => null);
 }
 
 init().catch(error => {
