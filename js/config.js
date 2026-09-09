@@ -1,8 +1,8 @@
 
 window.ZAKAT_CONFIG = {
-  supabaseUrl: "https://hlxaxsyogigjgwetgsmq.supabase.co",
-  supabaseAnonKey: "sb_publishable_aCZckVgv-x8FWiePrtEWxg_kq3DgHoe",
-  demoMode: false,
+  supabaseUrl: "",
+  supabaseAnonKey: "",
+  demoMode: true,
   edgeFunctions: {
     createUser: "create-user",
     resetUserPassword: "reset-user-password",

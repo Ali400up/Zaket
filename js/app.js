@@ -619,7 +619,7 @@ function isEmptyValue(value) {
 
 function renderFormField(field, value, relationOptions = [], itemOptions = []) {
   const full = field.full || ["textarea", "lineItems"].includes(field.type) ? "full" : "";
-  const label = `<label for="field-${field.key}">${escapeHtml(field.label)}${field.required || field.requiredOnCreate ? `<span class="required">*</span>` : ""}</label>`;
+  let label = `<label for="field-${field.key}">${escapeHtml(field.label)}${field.required || field.requiredOnCreate ? `<span class="required">*</span>` : ""}</label>`;
   if (field.type === "section") return `<div class="form-section"><strong>${escapeHtml(field.label)}</strong></div>`;
   if (field.type === "switch") return `<div class="form-field ${full}"><div class="switch-field"><div class="switch-copy"><strong>${escapeHtml(field.label)}</strong><small>${escapeHtml(field.help || "")}</small></div><label class="switch"><input id="field-${field.key}" name="${field.key}" type="checkbox" ${value ?? field.default ? "checked" : ""}><span class="switch-slider"></span></label></div></div>`;
   if (field.type === "lineItems") {
@@ -632,13 +632,15 @@ function renderFormField(field, value, relationOptions = [], itemOptions = []) {
     || ((field.lockForDistributor || field.key === "delegate_id") && role === "distributor");
   const common = `id="field-${field.key}" name="${field.key}" class="form-control" autocomplete="off" ${field.required ? "required" : ""} ${locked ? "disabled data-locked=\"true\"" : ""}`;
   const smartRelation = ["relation", "autocompleteRelation"].includes(field.type)
-    && shouldUseSearchableSelect(relationOptions.length, field.type === "autocompleteRelation" ? 0 : (field.searchThreshold ?? 8));
+    && (field.type === "autocompleteRelation" || shouldUseSearchableSelect(relationOptions.length, field.searchThreshold ?? 8));
   if (smartRelation) {
     const selected = relationOptions.find(option => String(option.value) === String(value ?? ""));
+    const optionIcon = ["beneficiary_id", "delegate_id", "profile_id", "user_id"].includes(field.key) ? "fa-user" : "fa-folder-open";
+    label = label.replace(`for="field-${field.key}"`, `for="field-${field.key}-search"`);
     control = `<div class="smart-select" data-smart-select="${field.key}" data-relation-autocomplete="${field.key}">
-      <div class="smart-select-input"><i class="fa-solid fa-magnifying-glass"></i><input id="field-${field.key}-search" class="form-control" type="search" role="combobox" aria-autocomplete="list" aria-expanded="false" autocomplete="off" placeholder="${escapeHtml(field.placeholder || "ابحث ثم اختر من القائمة")}" value="${escapeHtml(selected?.label || "")}" ${field.required ? "required" : ""} ${locked ? "disabled" : ""}><button type="button" class="smart-select-clear ${selected ? "" : "hidden"}" data-smart-clear aria-label="مسح الاختيار"><i class="fa-solid fa-xmark"></i></button></div>
+      <div class="smart-select-input"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="field-${field.key}-search" class="form-control" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="field-${field.key}-options" aria-expanded="false" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(field.placeholder || "ابحث ثم اختر من القائمة")}" value="${escapeHtml(selected?.label || "")}" ${field.required ? "required" : ""} ${locked ? "disabled" : ""}><button type="button" class="smart-select-clear ${selected ? "" : "hidden"}" data-smart-clear aria-label="مسح الاختيار" ${locked ? "disabled" : ""}><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><i class="fa-solid fa-chevron-down smart-select-chevron" aria-hidden="true"></i></div>
       <input id="field-${field.key}" name="${field.key}" type="hidden" value="${escapeHtml(value || "")}">
-      <div class="smart-select-menu hidden" role="listbox" data-relation-suggestions>${relationOptions.map(opt => `<button type="button" role="option" class="smart-select-option" data-smart-option data-relation-value="${escapeHtml(opt.value)}" data-relation-label="${escapeHtml(opt.label)}" data-delegate-id="${escapeHtml(opt.row?.delegate_id || "")}" data-name="${escapeHtml(opt.row?.full_name || opt.row?.name || "")}" data-phone="${escapeHtml(opt.row?.phone || "")}" data-currency="${escapeHtml(opt.row?.currency || "")}" data-file-no="${escapeHtml(opt.row?.file_no || "")}"><span class="smart-select-option-icon"><i class="fa-solid fa-check"></i></span><span><strong>${escapeHtml(opt.label)}</strong>${opt.row?.file_no ? `<small>${escapeHtml(opt.row.file_no)}</small>` : ""}</span></button>`).join("")}<div class="smart-select-empty hidden" data-smart-empty><i class="fa-regular fa-face-frown-open"></i><span>لا توجد نتيجة مطابقة</span></div></div>
+      <div id="field-${field.key}-options" class="smart-select-menu hidden" role="listbox" aria-label="${escapeHtml(field.label)}" data-relation-suggestions>${relationOptions.map((opt, index) => `<button id="field-${field.key}-option-${index}" type="button" role="option" tabindex="-1" class="smart-select-option" data-smart-option data-relation-value="${escapeHtml(opt.value)}" data-relation-label="${escapeHtml(opt.label)}" data-delegate-id="${escapeHtml(opt.row?.delegate_id || "")}" data-name="${escapeHtml(opt.row?.full_name || opt.row?.name || "")}" data-phone="${escapeHtml(opt.row?.phone || "")}" data-currency="${escapeHtml(opt.row?.currency || "")}" data-file-no="${escapeHtml(opt.row?.file_no || "")}"><span class="smart-select-option-icon" aria-hidden="true"><i class="fa-solid ${optionIcon}"></i></span><span class="smart-select-option-copy"><strong>${escapeHtml(opt.label)}</strong>${opt.row?.file_no ? `<small>رقم الملف: <bdi>${escapeHtml(opt.row.file_no)}</bdi></small>` : ""}</span><i class="fa-solid fa-check smart-select-option-check" aria-hidden="true"></i></button>`).join("")}<div class="smart-select-empty hidden" data-smart-empty><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><strong>لا توجد نتائج مطابقة</strong><span>جرّب كتابة جزء من الاسم</span></div></div>
     </div>`;
   } else if (field.type === "select" || field.type === "relation") {
     const options = field.type === "relation" ? relationOptions : (field.options || []);
@@ -732,40 +734,55 @@ function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], ed
     const clear = wrapper.querySelector("[data-smart-clear]");
     const empty = wrapper.querySelector("[data-smart-empty]");
     let activeIndex = -1;
+    const closeOptions = () => {
+      suggestions.classList.add("hidden");
+      search.setAttribute("aria-expanded", "false");
+      search.removeAttribute("aria-activedescendant");
+      activeIndex = -1;
+    };
     const showMatches = (clearSelection = true) => {
+      if (search.disabled) return;
       if (clearSelection && search.value !== hidden.dataset.selectedLabel) {
         hidden.value = "";
         clear?.classList.add("hidden");
       }
       const source = optionNodes.map(node => ({ value: node.dataset.relationValue, label: node.dataset.relationLabel, row: { file_no: node.dataset.fileNo } }));
-      const matches = new Set(filterSearchOptions(source, search.value, ["file_no"]).map(option => String(option.value)));
+      const query = !clearSelection && search.value === hidden.dataset.selectedLabel ? "" : search.value;
+      const matches = new Set(filterSearchOptions(source, query, ["file_no"]).map(option => String(option.value)));
       let visible = 0;
       optionNodes.forEach(option => {
         const match = matches.has(String(option.dataset.relationValue));
         option.classList.toggle("hidden", !match || visible >= 20);
         option.classList.remove("active");
+        option.setAttribute("aria-selected", String(option.dataset.relationValue === hidden.value));
         if (match && visible < 20) visible += 1;
       });
       empty?.classList.toggle("hidden", visible > 0);
       suggestions.classList.remove("hidden");
       search.setAttribute("aria-expanded", "true");
+      search.removeAttribute("aria-activedescendant");
       activeIndex = -1;
     };
     search.addEventListener("input", () => showMatches(true));
     search.addEventListener("focus", () => showMatches(false));
-    search.addEventListener("blur", () => setTimeout(() => {
-      suggestions.classList.add("hidden");
-      search.setAttribute("aria-expanded", "false");
-    }, 150));
+    search.addEventListener("click", () => showMatches(false));
+    wrapper.addEventListener("focusout", event => {
+      if (!wrapper.contains(event.relatedTarget)) closeOptions();
+    });
+    suggestions.addEventListener("mousedown", event => event.preventDefault());
+    clear?.addEventListener("mousedown", event => event.preventDefault());
     search.addEventListener("keydown", event => {
-      const visible = optionNodes.filter(option => !option.classList.contains("hidden"));
-      if (event.key === "Escape") { suggestions.classList.add("hidden"); search.setAttribute("aria-expanded", "false"); return; }
+      if (event.key === "Escape" && search.getAttribute("aria-expanded") === "true") { event.preventDefault(); event.stopPropagation(); closeOptions(); return; }
       if (!["ArrowDown", "ArrowUp", "Enter"].includes(event.key)) return;
+      if (event.key === "Enter" && search.getAttribute("aria-expanded") !== "true") return;
       event.preventDefault();
-      if (event.key === "Enter" && activeIndex >= 0) return visible[activeIndex]?.click();
+      if (search.getAttribute("aria-expanded") !== "true") showMatches(false);
+      const visible = optionNodes.filter(option => !option.classList.contains("hidden"));
+      if (event.key === "Enter") { if (activeIndex >= 0) visible[activeIndex]?.click(); return; }
       const step = event.key === "ArrowUp" ? -1 : 1;
-      activeIndex = Math.max(0, Math.min(visible.length - 1, activeIndex + step));
+      activeIndex = activeIndex < 0 && step < 0 ? visible.length - 1 : Math.max(0, Math.min(visible.length - 1, activeIndex + step));
       visible.forEach((option, index) => option.classList.toggle("active", index === activeIndex));
+      if (visible[activeIndex]) search.setAttribute("aria-activedescendant", visible[activeIndex].id);
       visible[activeIndex]?.scrollIntoView({ block: "nearest" });
     });
     suggestions.addEventListener("click", event => {
@@ -776,8 +793,7 @@ function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], ed
       hidden.dataset.selectedLabel = search.value;
       optionNodes.forEach(node => node.setAttribute("aria-selected", String(node === option)));
       clear?.classList.remove("hidden");
-      suggestions.classList.add("hidden");
-      search.setAttribute("aria-expanded", "false");
+      closeOptions();
       hidden.dispatchEvent(new CustomEvent("relation:selected", { bubbles: true, detail: { id: hidden.value, delegateId: option.dataset.delegateId || null, name: option.dataset.name || "", phone: option.dataset.phone || "", currency: option.dataset.currency || "" } }));
     });
     clear?.addEventListener("click", () => {

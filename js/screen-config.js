@@ -48,7 +48,7 @@ export const statusLabels = {
 
 export const menuSections = [
   { label: "الرئيسية", items: [
-    { id: "dashboard", label: "لوحة التحكم", icon: "fa-solid fa-grid-2" },
+    { id: "dashboard", label: "لوحة التحكم", icon: "fa-solid fa-table-cells-large" },
     { id: "ai-assistant", label: "المساعد الذكي", icon: "fa-solid fa-wand-magic-sparkles" },
     { id: "global-search", label: "البحث العام", icon: "fa-solid fa-magnifying-glass" },
     { id: "guide", label: "دليل الاستخدام", icon: "fa-solid fa-circle-question" }
