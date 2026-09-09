@@ -5,7 +5,7 @@ import { readFile } from "node:fs/promises";
 const root = new URL("..", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
 
-test("V12.2 has an accessible backup wizard and calm responsive design tokens", async () => {
+test("the interface has an accessible backup wizard, responsive tokens, and local icons", async () => {
   const app = await read("js/app.js");
   const css = await read("css/styles.css");
   const html = await read("index.html");
@@ -15,11 +15,11 @@ test("V12.2 has an accessible backup wizard and calm responsive design tokens", 
   assert.match(app, /EXACT-RESTORE/);
   assert.match(app, /V2 محولة وستُطابق بصمتها على الخادم/);
   assert.match(app, /V1 قديمة غير موقعة/);
-  assert.match(app, /لا يحذف ملفات المستخدمين أو حسابات Auth/);
+  assert.match(app, /تنظف ملفات Storage غير الموجودة في النسخة بعد نجاح البيانات فقط/);
   assert.match(css, /--focus-ring:/);
   assert.match(css, /\.primary-button:focus-visible/);
   assert.match(css, /\.switch input:checked \+ \.switch-slider/);
   assert.match(css, /@media \(max-width: 760px\)/);
-  assert.match(html, /Font Awesome\/i\.test\(s\.fontFamily\)/);
-  assert.match(html, /fontawesome-missing/);
+  assert.match(html, /assets\/vendor\/fontawesome\/css\/all\.min\.css/);
+  assert.doesNotMatch(html, /fontawesome-free@|fonts\.googleapis/);
 });

@@ -87,8 +87,9 @@ test("backup manager requires an explicit restore confirmation phrase", () => {
   );
 });
 
-test("backup manager exposes only the eight fixed V3 operations", () => {
+test("backup manager exposes the fixed V3 operations and the V4 Storage inventory", () => {
   const cases = [
+    [{ action: "list_storage_files", payload: {} }, "backup_v4_list_storage_files", {}],
     [{ action: "start_export", payload: { scope: "administrative", consistent: false } }, "backup_v3_start_export", { p_scope: "administrative", p_consistent: false }],
     [{ action: "finish_export", payload: { session_id: SESSION_ID } }, "backup_v3_finish_export", { p_session_id: SESSION_ID }],
     [{ action: "cancel_export", payload: { session_id: SESSION_ID } }, "backup_v3_cancel_export", { p_session_id: SESSION_ID }],
@@ -100,5 +101,14 @@ test("backup manager exposes only the eight fixed V3 operations", () => {
 
   for (const [request, rpc, args] of cases) {
     assert.deepEqual(normalizeBackupManagerRequest(request), { action: request.action, rpc, args });
+  }
+});
+
+test("backup allow-list contains currencies and excludes retired modules", async () => {
+  const { BACKUP_ALLOWED_TABLES } = await import("../supabase/functions/backup-manager/core.js");
+  assert.ok(BACKUP_ALLOWED_TABLES.includes("currencies"));
+  assert.ok(BACKUP_ALLOWED_TABLES.includes("currency_exchanges"));
+  for (const retired of ["wallet_providers", "message_templates", "bulk_disbursements", "disbursement_results", "messages"]) {
+    assert.equal(BACKUP_ALLOWED_TABLES.includes(retired), false);
   }
 });

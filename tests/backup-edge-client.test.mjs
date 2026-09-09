@@ -63,6 +63,7 @@ test("live backup transport maps every V3 operation to a fixed Edge action", asy
   const manifest = { format: "zakat-backup-v3", tables: {} };
 
   await client.exportPart(sessionId, "beneficiaries", "b-1", 100);
+  await client.listStorageFiles();
   await client.finishExport(sessionId);
   await client.cancelExport(sessionId);
   await client.startRestore(manifest, "exact");
@@ -72,6 +73,7 @@ test("live backup transport maps every V3 operation to a fixed Edge action", asy
 
   assert.deepEqual(calls, [
     { action: "export_part", payload: { session_id: sessionId, table: "beneficiaries", after_id: "b-1", limit: 100 } },
+    { action: "list_storage_files", payload: {} },
     { action: "finish_export", payload: { session_id: sessionId } },
     { action: "cancel_export", payload: { session_id: sessionId } },
     { action: "start_restore", payload: { manifest, mode: "exact" } },

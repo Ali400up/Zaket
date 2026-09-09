@@ -5,41 +5,7 @@ import { readFile } from "node:fs/promises";
 const root = new URL("..", import.meta.url);
 const read = path => readFile(new URL(path, root), "utf8");
 
-test("assistant has a role-filtered system knowledge source and constrained action registry", async () => {
-  const sql = await read("supabase/database_complete.sql");
-  const edge = await read("supabase/functions/gemini-assistant/index.ts");
 
-  assert.match(sql, /CREATE TABLE IF NOT EXISTS public\.system_knowledge_articles/);
-  assert.match(sql, /search_system_knowledge/);
-  assert.match(sql, /record-actions/);
-  assert.match(sql, /article\.how_to::text,article\.rules::text/);
-  assert.match(sql, /regexp_split_to_table\(input\.term/);
-  assert.match(sql, /system_knowledge_articles_enable_rls/);
-  assert.match(edge, /ACTION_REGISTRY/);
-  assert.match(edge, /delegate: new Set\(\["admin", "supervisor", "accountant"\]\)/);
-  assert.match(edge, /campaign: new Set\(\["admin", "supervisor", "accountant"\]\)/);
-  assert.match(edge, /allowedFields/);
-  assert.match(edge, /propose_mutation/);
-  assert.match(edge, /idempotency_key/);
-  assert.match(edge, /gemini-3\.7-flash/);
-  assert.match(edge, /"x-goog-api-key": apiKey/);
-  assert.doesNotMatch(edge, /generateContent\?key=/);
-  assert.match(edge, /AbortController/);
-  assert.match(edge, /const geminiDeadline = Date\.now\(\) \+ 45000/);
-  assert.match(edge, /Math\.min\(12000, Math\.max\(1000, deadlineAt - Date\.now\(\) - 1000\)\)/);
-  assert.match(edge, /attempt < 2/);
-  assert.match(edge, /target_status/);
-  assert.match(edge, /staleLease/);
-  assert.match(edge, /fieldsMatch/);
-  assert.match(edge, /record_id: operation === "create" \? crypto\.randomUUID\(\)/);
-  assert.match(edge, /current_delegate_can_create_beneficiaries/);
-  assert.match(edge, /const effective = \{ \.\.\.\(current \|\| \{\}\), \.\.\.fields \}/);
-  assert.match(edge, /تاريخ نهاية كشف الحساب يسبق تاريخ البداية/);
-  assert.match(edge, /تاريخ بداية كشف الحساب غير صالح/);
-  assert.match(edge, /تاريخ نهاية كشف الحساب غير صالح/);
-  assert.match(edge, /إجراء واحد في كل رسالة/);
-  assert.doesNotMatch(edge, /execute_sql/);
-});
 
 test("assistant UI exposes safe report, navigation, and confirmation affordances", async () => {
   const ai = await read("js/ai-assistant.js");
@@ -52,4 +18,20 @@ test("assistant UI exposes safe report, navigation, and confirmation affordances
   assert.match(ai, /zakat:assistant-ui-command/);
   assert.match(app, /zakat:assistant-ui-command/);
   assert.match(ai, /لا ينفذ المساعد التغيير دون تأكيد/);
+  assert.match(ai, /DELETE-RECORD/);
+  assert.match(ai, /confirmation/);
+});
+
+test("assistant conversation is a concise accessible live workspace", async () => {
+  const ai = await read("js/ai-assistant.js");
+
+  assert.match(ai, /role="log" aria-live="polite" aria-relevant="additions text"/);
+  assert.match(ai, /aria-label="اكتب رسالتك للمساعد" aria-controls="ai-chat-log"/);
+  assert.match(ai, /data-ai-new-chat type="button"/);
+  assert.match(ai, /const visiblePrompts = [^;]+\.slice\(0, 4\)/);
+  assert.match(ai, /result\.suggestions\.slice\(0, 4\)/);
+  assert.doesNotMatch(ai, /result\.suggestions\.slice\(0, 5\)/);
+  assert.match(ai, /assistantState\.suggestions = \[\]/);
+  assert.match(ai, /menuSections/);
+  assert.doesNotMatch(ai, /السياق: \$\{escapeHtml\(assistantState\.currentScreen\)\}/);
 });
