@@ -1,4 +1,4 @@
-const CACHE_NAME = "zakat-12-5-0-cache";
+const CACHE_NAME = "zakat-12-5-0-ui2-cache";
 const STATIC_ASSETS = [
   "/", "/index.html", "/css/styles.css", "/css/login.css", "/js/config.js", "/js/app.js",
   "/js/data-service.js", "/js/backup-edge-client.js", "/js/backup-v3.js", "/js/backup-v4.js", "/js/attachment-manager.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
