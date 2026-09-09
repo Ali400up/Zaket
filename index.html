@@ -8,31 +8,27 @@
   <title>نظام إدارة الزكاة والتبرعات</title>
   <link rel="icon" href="assets/logo.svg" type="image/svg+xml" />
   <link rel="manifest" href="manifest.webmanifest" />
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Cairo:wght@400;500;600;700;800&family=Tajawal:wght@400;500;700;800&display=swap" rel="stylesheet">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@6.5.2/css/all.min.css" />
-  <script>window.addEventListener("DOMContentLoaded",()=>{const t=document.createElement("i");t.className="fa-solid fa-laptop";t.style.cssText="position:absolute;visibility:hidden";document.body.appendChild(t);const s=getComputedStyle(t);const c=getComputedStyle(t,"::before").content;const ok=/Font Awesome/i.test(s.fontFamily)&&c&&!['none','normal','""'].includes(c);document.documentElement.classList.toggle("fontawesome-missing",!ok);t.remove();});</script>
+  <link rel="stylesheet" href="assets/vendor/fontawesome/css/all.min.css" />
+  <link rel="preload" href="assets/fonts/Tajawal-Regular.ttf" as="font" type="font/ttf" crossorigin />
   <link rel="stylesheet" href="css/styles.css" />
+  <link rel="stylesheet" href="css/login.css" />
   <script src="assets/vendor/jszip.min.js"></script>
   <script src="assets/vendor/xlsx.full.min.js"></script>
 </head>
-<body>
+<body class="app-host">
   <noscript>يجب تفعيل JavaScript لتشغيل النظام.</noscript>
 
   <div id="login-view" class="login-page">
     <section class="login-visual" aria-hidden="true">
-      <div class="orb orb-one"></div>
-      <div class="orb orb-two"></div>
       <div class="visual-inner">
-        <div class="visual-logo"><img src="assets/logo.svg" alt="" /></div>
-        <span class="eyebrow">منصة موحدة وآمنة</span>
-        <h1>إدارة الزكاة والتبرعات<br />بوضوح وثقة</h1>
-        <p>تابع المتبرعين والمستفيدين والحملات والأرصدة والمخزون من لوحة عربية متجاوبة.</p>
-        <div class="feature-pills">
-          <span><i class="fa-solid fa-shield-halved"></i> صلاحيات دقيقة</span>
-          <span><i class="fa-solid fa-boxes-stacked"></i> مخزون متكامل</span>
-          <span><i class="fa-solid fa-chart-line"></i> تقارير مباشرة</span>
+        <div class="login-brand"><span class="visual-logo"><img src="assets/logo.svg" alt="" /></span><div><strong>نظام الزكاة والتبرعات</strong><span>تنظيم العطاء، من البداية إلى الأثر</span></div></div>
+        <span class="eyebrow"><span class="login-dot"></span> كل تفاصيل العمل، في مكان واحد</span>
+        <h1>إدارة العطاء<br /><span>بوضوح واطمئنان.</span></h1>
+        <p>مساحة مرتبة لمتابعة المستفيدين والتبرعات، وتوثيق كل عملية بخطوات واضحة.</p>
+        <div class="visual-features">
+          <div><i class="fa-solid fa-hand-holding-heart"></i><strong>المستفيدون</strong><span>متابعة ملفات الاستحقاق</span></div>
+          <div><i class="fa-solid fa-boxes-stacked"></i><strong>الحملات والمخزون</strong><span>تنظيم النقدي والعيني</span></div>
+          <div><i class="fa-solid fa-file-invoice"></i><strong>السندات والتقارير</strong><span>توثيق ومتابعة العمليات</span></div>
         </div>
       </div>
     </section>
@@ -43,15 +39,16 @@
           <img src="assets/logo.svg" alt="شعار النظام" />
           <div><strong>نظام الزكاة</strong><span>والتبرعات</span></div>
         </div>
-        <span class="eyebrow blue">مرحباً بعودتك</span>
+        <div class="login-heading-icon" aria-hidden="true"><i class="fa-solid fa-arrow-right-to-bracket"></i></div>
+        <span class="login-greeting">أهلًا بعودتك</span>
         <h2>تسجيل الدخول</h2>
-        <p class="muted">أدخل بيانات حسابك للانتقال إلى لوحة التحكم.</p>
+        <p class="muted">سجّل دخولك لمتابعة أعمالك وإدارة النظام.</p>
 
         <form id="login-form" class="auth-form" autocomplete="on">
           <label class="field-label" for="login-phone">رقم الهاتف</label>
           <div class="input-icon">
             <i class="fa-regular fa-user"></i>
-            <input id="login-phone" name="phone" type="tel" inputmode="tel" placeholder="مثال: 777123456" autocomplete="tel" required />
+            <input id="login-phone" name="phone" type="tel" inputmode="tel" placeholder="مثال: 777123456" autocomplete="username" dir="ltr" required />
           </div>
 
           <div class="label-row">
@@ -88,7 +85,7 @@
       <nav id="main-nav" class="main-nav" aria-label="القائمة الرئيسية"></nav>
 
       <div class="sidebar-footer">
-        <div class="sidebar-version" id="sidebar-version">الإصدار 12.2.0</div>
+        <div class="sidebar-version" id="sidebar-version">الإصدار V12.5.0</div>
         <div class="connection-chip" id="connection-chip"><span class="status-dot"></span><span>متصل</span></div>
         <button class="profile-mini" id="profile-menu-button">
           <span class="avatar" id="sidebar-avatar">م</span>
@@ -98,20 +95,21 @@
       </div>
     </aside>
 
-    <div class="app-main">
+    <div class="app-main app-scroll">
       <header class="topbar">
         <div class="topbar-start">
           <button class="icon-button menu-toggle" id="menu-toggle" aria-label="فتح القائمة"><i class="fa-solid fa-bars"></i></button>
+          <span class="page-symbol" id="page-symbol" aria-hidden="true"><i class="fa-solid fa-chart-pie"></i></span>
           <div class="page-heading">
             <div class="breadcrumbs"><span>الرئيسية</span><i class="fa-solid fa-chevron-left"></i><strong id="breadcrumb-current">لوحة التحكم</strong></div>
             <h1 id="page-title">لوحة التحكم</h1>
           </div>
         </div>
         <div class="topbar-actions">
-          <button class="quick-search" id="quick-search"><i class="fa-solid fa-magnifying-glass"></i><span>بحث سريع</span><kbd>Ctrl K</kbd></button>
+          <button class="quick-search" id="quick-search" aria-label="بحث سريع في النظام"><i class="fa-solid fa-magnifying-glass"></i><span>بحث سريع</span><kbd>Ctrl K</kbd></button>
           <button class="icon-button top-icon" id="sync-button" aria-label="المزامنة"><i class="fa-solid fa-arrows-rotate"></i><span id="sync-badge" class="notification-badge hidden">0</span></button>
-          <button class="icon-button top-icon" id="notifications-button" aria-label="التنبيهات"><i class="fa-regular fa-bell"></i><span class="notification-badge">3</span></button>
-          <button class="user-button" id="user-button"><span class="avatar" id="top-avatar">م</span><span class="user-copy"><strong id="top-user-name">مدير النظام</strong><small id="top-user-role">مدير النظام</small></span><i class="fa-solid fa-chevron-down"></i></button>
+          <button class="icon-button top-icon" id="notifications-button" aria-label="فتح مركز التنبيهات"><i class="fa-regular fa-bell"></i><span id="notifications-badge" class="notification-badge hidden">0</span></button>
+          <button class="user-button" id="user-button" aria-label="الحساب وخيارات المستخدم"><span class="avatar" id="top-avatar">م</span><span class="user-copy"><strong id="top-user-name">مدير النظام</strong><small id="top-user-role">مدير النظام</small></span><i class="fa-solid fa-chevron-down"></i></button>
         </div>
       </header>
 
@@ -138,8 +136,8 @@
 
   <div id="drawer-root" class="drawer-root hidden" aria-hidden="true">
     <div class="drawer-backdrop" data-close-drawer></div>
-    <aside class="drawer">
-      <header><h2 id="drawer-title">التفاصيل</h2><button class="icon-button" data-close-drawer><i class="fa-solid fa-xmark"></i></button></header>
+    <aside class="drawer" role="dialog" aria-modal="true" aria-labelledby="drawer-title">
+      <header><h2 id="drawer-title">التفاصيل</h2><button class="icon-button" data-close-drawer aria-label="إغلاق التفاصيل"><i class="fa-solid fa-xmark"></i></button></header>
       <div id="drawer-body" class="drawer-body"></div>
     </aside>
   </div>
@@ -154,7 +152,8 @@
     </section>
   </div>
 
-  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.7/dist/chart.umd.min.js"></script>
+  <script src="assets/vendor/chart.umd.min.js"></script>
+  <script src="assets/vendor/supabase.min.js"></script>
   <script src="js/config.js"></script>
   <script type="module" src="js/app.js"></script>
 </body>

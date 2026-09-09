@@ -1,9 +1,15 @@
-const CACHE_NAME = "zakat-v12-2-0-verified-cache";
+const CACHE_NAME = "zakat-12-5-0-cache";
 const STATIC_ASSETS = [
-  "/", "/index.html", "/css/styles.css", "/js/config.js", "/js/app.js",
-  "/js/data-service.js", "/js/backup-edge-client.js", "/js/backup-v3.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
-  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js", "/js/device-identity.js", "/js/ai-assistant.js", "/js/state-machines.js",
-  "/js/ui.js", "/js/user-guide.js", "/assets/logo.svg", "/assets/vendor/xlsx.full.min.js", "/assets/vendor/jszip.min.js", "/manifest.webmanifest"
+  "/", "/index.html", "/css/styles.css", "/css/login.css", "/js/config.js", "/js/app.js",
+  "/js/data-service.js", "/js/backup-edge-client.js", "/js/backup-v3.js", "/js/backup-v4.js", "/js/attachment-manager.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
+  "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js", "/js/device-identity.js", "/js/ai-assistant.js", "/js/assistant-intents.js", "/js/currency-service.js", "/js/session-audit.js", "/js/searchable-select.js", "/js/state-machines.js",
+  "/js/ui.js", "/js/screen-values.js", "/js/user-guide.js", "/js/print-service.js", "/js/in-kind-valuation.js", "/js/error-presenter.js", "/js/release-notes.js", "/js/notification-center.js", "/js/system-health.js", "/js/storage-scope.js",
+  "/assets/logo.svg", "/assets/fonts/Tajawal-Regular.ttf", "/assets/fonts/Tajawal-Bold.ttf",
+  "/assets/fonts/Tajawal-Medium.ttf", "/assets/fonts/Tajawal-ExtraBold.ttf",
+  "/assets/vendor/xlsx.full.min.js", "/assets/vendor/jszip.min.js", "/assets/vendor/chart.umd.min.js", "/assets/vendor/supabase.min.js",
+  "/assets/vendor/fontawesome/css/all.min.css", "/assets/vendor/fontawesome/webfonts/fa-solid-900.woff2",
+  "/assets/vendor/fontawesome/webfonts/fa-regular-400.woff2", "/assets/vendor/fontawesome/webfonts/fa-brands-400.woff2",
+  "/assets/vendor/fontawesome/webfonts/fa-v4compatibility.woff2", "/manifest.webmanifest"
 ];
 
 self.addEventListener("install", event => {
@@ -18,8 +24,6 @@ self.addEventListener("fetch", event => {
   if (event.request.method !== "GET") return;
   const requestUrl = new URL(event.request.url);
 
-  // مهم: لا نعترض أي طلب خارجي، بما في ذلك فحص الإنترنت وSupabase.
-  // وإلا قد تعيد الذاكرة المؤقتة استجابة قديمة وتعرض "متصل" أثناء انقطاع الشبكة.
   if (requestUrl.origin !== self.location.origin) return;
 
   event.respondWith((async () => {
