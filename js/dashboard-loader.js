@@ -49,3 +49,46 @@ export async function loadDashboardSections(sources, {
   if (signal?.aborted) throw aborted();
   return { ...snapshot };
 }
+
+function waitForRetry(delay, signal) {
+  if (signal?.aborted) return Promise.reject(aborted());
+  return new Promise((resolve, reject) => {
+    const cancel = () => { clearTimeout(timer); signal?.removeEventListener("abort", cancel); reject(aborted()); };
+    const timer = setTimeout(() => { signal?.removeEventListener("abort", cancel); resolve(); }, delay);
+    signal?.addEventListener("abort", cancel, { once: true });
+  });
+}
+
+// Continue failed dashboard reads after the initial screen has finished. This
+// leaves navigation and background sync free, keeps successful sections, and
+// uses a growing delay so failures cannot produce a rapid request loop.
+export async function retryDashboardSections(sources, initial, {
+  signal, onUpdate = () => {}, isCurrent = () => true,
+  concurrency = 2, timeoutMs = 12_000, retryDelayMs = 3_000, maxRetryDelayMs = 30_000
+} = {}) {
+  let snapshot = { ...initial };
+  let delay = Math.max(1, retryDelayMs);
+  const maximumDelay = Math.max(delay, maxRetryDelayMs);
+  const publish = () => { if (!signal?.aborted && isCurrent()) onUpdate({ ...snapshot }); };
+  while (isCurrent()) {
+    if (signal?.aborted) throw aborted();
+    const pending = sources.filter(source => snapshot[source.key]?.status !== "success");
+    if (!pending.length) return snapshot;
+    pending.forEach(source => { snapshot[source.key] = { ...snapshot[source.key], status: "retrying" }; });
+    publish();
+    await waitForRetry(delay, signal);
+    if (!isCurrent()) return snapshot;
+    const attempts = Object.fromEntries(pending.map(source => [source.key, snapshot[source.key]?.attempts || 0]));
+    await loadDashboardSections(pending, {
+      signal, concurrency, timeoutMs, retries: 0,
+      onUpdate(partial) {
+        for (const [key, section] of Object.entries(partial)) {
+          snapshot[key] = { ...section, attempts: attempts[key] + section.attempts };
+        }
+        publish();
+      }
+    });
+    delay = Math.min(maximumDelay, delay * 2);
+  }
+  return snapshot;
+}

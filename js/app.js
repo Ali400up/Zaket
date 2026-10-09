@@ -18,7 +18,7 @@ import { formatPrivateValue } from "./screen-values.js";
 import { convertCurrency, deriveExchangeRate, buildCashFlowSummary } from "./currency-service.js";
 import { filterSearchOptions, shouldUseSearchableSelect, createLatestRequest } from "./searchable-select.js";
 import { healthMetric, describeHealthError } from "./system-health.js";
-import { loadDashboardSections } from "./dashboard-loader.js";
+import { loadDashboardSections, retryDashboardSections } from "./dashboard-loader.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -364,11 +364,7 @@ function dashboardSectionValue(snapshot, key, format) {
 }
 
 function dashboardSectionMessage(snapshot, key) {
-  const section = snapshot[key];
-  if (section?.status === "success") return "";
-  if (section?.status === "error") return section.error?.code === "57014" || section.error?.code === "DASHBOARD_TIMEOUT"
-    ? "تأخر استعلام هذا القسم؛ أعد المحاولة." : "تعذر تحميل هذا القسم؛ أعد المحاولة.";
-  return section?.status === "retrying" ? "إعادة المحاولة تلقائياً..." : "جاري التحميل...";
+  return snapshot[key]?.status === "success" ? "" : "جاري التحميل...";
 }
 
 async function renderDashboard() {
@@ -376,10 +372,12 @@ async function renderDashboard() {
   const session = state.session, profileId = String(session?.profile?.id || "");
   const current = () => request.isCurrent() && state.currentScreen === "dashboard" && state.session === session && String(state.session?.profile?.id || "") === profileId;
   try {
-    await loadDashboardSections(dashboardQuerySpecs(), {
-      signal: request.signal,
-      onUpdate: snapshot => { if (current()) renderDashboardContent(snapshot, current); }
-    });
+    const sources = dashboardQuerySpecs();
+    const onUpdate = snapshot => { if (current()) renderDashboardContent(snapshot, current); };
+    const snapshot = await loadDashboardSections(sources, { signal: request.signal, onUpdate });
+    if (current()) retryDashboardSections(sources, snapshot, {
+      signal: request.signal, isCurrent: current, onUpdate
+    }).catch(error => { if (error?.name !== "AbortError" && current()) console.warn("تعذر استئناف تحميل اللوحة", error); });
   } catch (error) { if (error?.name !== "AbortError" && current()) throw error; }
 }
 
@@ -392,8 +390,7 @@ function renderDashboardContent(snapshot, current = () => true) {
   const stockReady = snapshot.items?.status === "success";
   const cashReady = snapshot.receipts?.status === "success" && snapshot.payments?.status === "success";
   const pendingReady = snapshot.pendingCash?.status === "success" && snapshot.pendingInKind?.status === "success";
-  const errors = Object.values(snapshot).filter(section => section.status === "error");
-  const loading = Object.values(snapshot).some(section => ["loading", "retrying"].includes(section.status));
+  const loading = Object.values(snapshot).some(section => section.status !== "success");
   destroyCharts();
 
   const displayCurrency = state.dashboardCurrency;
@@ -424,7 +421,6 @@ function renderDashboardContent(snapshot, current = () => true) {
 
   els.pageContent.innerHTML = `
     ${loading ? '<div class="info-callout" role="status">جاري التحميل التدريجي للأقسام؛ يمكنك استخدام الإجراءات المتاحة.</div>' : ""}
-    ${errors.length ? `<div class="info-callout" role="status"><strong>تعذر تحميل بعض الأقسام؛ بقية اللوحة متاحة.</strong><ul>${errors.map(section => `<li>${escapeHtml(section.label)}: ${escapeHtml(section.error?.message || "تعذر التحميل")} ${escapeHtml(section.error?.code || "")}</li>`).join("")}</ul><button class="secondary-button" data-retry>إعادة تحميل الأقسام</button></div>` : ""}
     <section class="welcome-banner">
       <div class="welcome-copy"><span><i class="fa-regular fa-sun" aria-hidden="true"></i> لوحة المتابعة اليومية</span><h2>مرحباً ${escapeHtml(firstName)}، إليك ملخص العمل.</h2><p>وقت العرض: ${formatDate(new Date().toISOString(), true)} • ${dataService.demoMode ? "بيانات تجريبية محلية" : isOnline() ? "وضع العمل المتصل" : "آخر بيانات محفوظة محلياً"}</p></div>
       <div class="welcome-actions">${canQuickDeliver ? `<button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button>` : ""}${canAddBeneficiary ? `<button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button>` : ""}</div>
@@ -438,7 +434,7 @@ function renderDashboardContent(snapshot, current = () => true) {
     </section>
     <section class="dashboard-grid">
       <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-chart-line"></i></span><div><h3>حركة القبض والصرف</h3><p>آخر ستة أشهر من السندات المسموح بها، بالعملة المختارة</p></div></div><div class="panel-actions"><label class="cash-currency-control">عملة العرض<select class="form-control" data-cash-flow-currency>${currencyOptions}</select></label><button class="secondary-button" data-nav="reports"><i class="fa-solid fa-arrow-up-right-from-square"></i> التقارير</button></div></header><div class="panel-body">${cashReady ? '<div class="chart-wrap"><canvas id="cash-flow-chart"></canvas></div>' : `<div class="info-callout">${escapeHtml(dashboardSectionMessage(snapshot,"receipts") || dashboardSectionMessage(snapshot,"payments"))}</div>`}</div></article>
-      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bell"></i></span><div><h3>التنبيهات المهمة</h3><p>تحتاج إلى متابعة أو قرار</p></div></div><span class="status-badge under_review">${pendingReady && stockReady && snapshot.beneficiaries?.status === "success" ? `${pendingCount + lowStock.length + duplicateCandidates.length} تنبيه` : "الفحص غير مكتمل"}</span></header><div class="panel-body"><div class="alert-list">
+      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bell"></i></span><div><h3>التنبيهات المهمة</h3><p>تحتاج إلى متابعة أو قرار</p></div></div><span class="status-badge under_review">${pendingReady && stockReady && snapshot.beneficiaries?.status === "success" ? `${pendingCount + lowStock.length + duplicateCandidates.length} تنبيه` : "جاري الفحص..."}</span></header><div class="panel-body"><div class="alert-list">
         ${lowStock.length ? `<div class="alert-item danger"><i class="fa-solid fa-box-open"></i><div class="alert-copy"><strong>مخزون منخفض</strong><span>${lowStock.map(x => x.name).slice(0, 3).join("، ")}</span></div><button data-nav="inventory">فتح</button></div>` : ""}
         ${pendingCount ? `<div class="alert-item warning"><i class="fa-solid fa-hourglass-half"></i><div class="alert-copy"><strong>عمليات تحت المراجعة</strong><span>${pendingCount} سند صرف ينتظر الاعتماد</span></div><button data-nav="cash-payments">فتح</button></div>` : ""}
         ${duplicateCandidates.length ? `<div class="alert-item info"><i class="fa-solid fa-clone"></i><div class="alert-copy"><strong>تشابه في المستفيدين</strong><span>${duplicateCandidates.length} ملف في عينة اللوحة يحتاج فحص التكرار</span></div><button data-nav="beneficiaries">فتح</button></div>` : ""}
