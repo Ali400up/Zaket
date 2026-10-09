@@ -1,9 +1,9 @@
-const CACHE_NAME = "zakat-12-5-0-ui4-cache";
+const CACHE_NAME = "zakat-12-5-0-ui4-excel1-beneficiary-search1-cache";
 const STATIC_ASSETS = [
   "/", "/index.html", "/css/styles.css", "/css/login.css", "/js/config.js", "/js/app.js",
   "/js/data-service.js", "/js/backup-edge-client.js", "/js/backup-v3.js", "/js/backup-v4.js", "/js/attachment-manager.js", "/js/import-service.js", "/js/connectivity.js", "/js/demo-data.js",
   "/js/offline.js", "/js/screen-config.js", "/js/supabase-client.js", "/js/device-identity.js", "/js/ai-assistant.js", "/js/assistant-intents.js", "/js/currency-service.js", "/js/session-audit.js", "/js/searchable-select.js", "/js/state-machines.js",
-  "/js/ui.js", "/js/screen-values.js", "/js/user-guide.js", "/js/print-service.js", "/js/in-kind-valuation.js", "/js/error-presenter.js", "/js/release-notes.js", "/js/notification-center.js", "/js/system-health.js", "/js/storage-scope.js",
+  "/js/ui.js", "/js/screen-values.js", "/js/user-guide.js", "/js/print-service.js", "/js/in-kind-valuation.js", "/js/error-presenter.js", "/js/release-notes.js", "/js/notification-center.js", "/js/system-health.js", "/js/storage-scope.js", "/js/beneficiary-directory.js",
   "/assets/logo.svg", "/assets/fonts/Tajawal-Regular.ttf", "/assets/fonts/Tajawal-Bold.ttf",
   "/assets/fonts/Tajawal-Medium.ttf", "/assets/fonts/Tajawal-ExtraBold.ttf",
   "/assets/vendor/xlsx.full.min.js", "/assets/vendor/jszip.min.js", "/assets/vendor/chart.umd.min.js", "/assets/vendor/supabase.min.js",
