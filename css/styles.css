@@ -1262,6 +1262,7 @@ body{background:var(--page);color:var(--ink-900);font-size:calc(16px * var(--fon
 .notification-count{background:#e8f2fc;color:var(--primary-800)}
 .quick-suggestions{box-shadow:var(--shadow-md)}
 .quick-suggestion-item:hover, .quick-suggestion-item:focus{background:#eef6ff}
+.search-result-pagination{display:flex;justify-content:space-between;align-items:center;gap:8px;padding:8px;font-size:.8rem;color:#64748b;border-top:1px solid #e5edf6}
 .nav-link span, .page-description, .search-input input, .filter-control select, .filter-control input, .form-control, .form-label, .field-label, .switch-copy strong, .quick-action-card span, .alert-copy strong, .notification-copy strong, .primary-button, .secondary-button, .ghost-button, .danger-button, .settings-nav button, .cell-title strong, .report-card strong, .sync-card strong, .detail-item strong{
   font-size:calc(14px * var(--font-scale,1));line-height:1.8
 }
