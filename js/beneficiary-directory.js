@@ -85,7 +85,7 @@ export function createBeneficiaryDirectory({
   let mutationRevision = 0, mutations = new Map(), idRevisions = new Map(), idRequests = new Map(), snapshotRevision = 0;
   let fingerprint = null, lastFullSync = 0, savedAt = null;
   let writeChain = Promise.resolve(), persistent = true;
-  let stopWatching = () => {}, pollTimer = null, realtimeTimer = null;
+  let stopWatching = () => {}, pollTimer = null, realtimeTimer = null, watchingRevision = 0;
   const listeners = new Set();
   const notify = () => { onChange(); listeners.forEach(listener => listener()); };
   function allowed(row) {
@@ -156,24 +156,38 @@ export function createBeneficiaryDirectory({
       if (ready) return;
       await directory.refresh();
     },
-    async refresh() {
+    async refresh({ watch } = {}) {
       await activation;
-      if (activeRefresh) return activeRefresh;
+      if (watch !== undefined && watch !== watchingRevision) return;
+      if (activeRefresh) {
+        const epoch = generation;
+        try { await activeRefresh; return; }
+        catch (error) {
+          // Explicit searches may take over an automatic refresh that was
+          // cancelled by navigation, without inheriting an empty index.
+          if (watch !== undefined || error?.name !== "AbortError" || epoch !== generation) throw error;
+          return directory.refresh();
+        }
+      }
       if (!isOnline()) {
         if (!ready) throw new Error("يلزم الاتصال لتحميل دليل المستفيدين أول مرة.");
         return;
       }
       const epoch = generation, key = scopeKey;
-      assertCurrent(epoch);
+      const assertRefreshCurrent = () => {
+        assertCurrent(epoch);
+        if (watch !== undefined && watch !== watchingRevision) throw new DOMException("Background sync paused", "AbortError");
+      };
+      assertRefreshCurrent();
       const task = (async () => {
         // The complete map is published atomically, never a partial first page.
         let next, latest, attemptRevision;
         for (let attempt = 0; attempt < 3; attempt += 1) {
           attemptRevision = mutationRevision;
-          const before = await fetchFingerprint?.(); assertCurrent(epoch);
+          const before = await fetchFingerprint?.(); assertRefreshCurrent();
           next = new Map(); let afterId = null;
           while (true) {
-            const batch = await fetchPage({ afterId, limit: PAGE_SIZE }); assertCurrent(epoch);
+            const batch = await fetchPage({ afterId, limit: PAGE_SIZE }); assertRefreshCurrent();
             if (!Array.isArray(batch)) throw new Error("استجابة غير صالحة لدليل المستفيدين.");
             if (!batch.length) break;
             const lastId = String(batch.at(-1).id || "");
@@ -181,7 +195,7 @@ export function createBeneficiaryDirectory({
             batch.forEach(row => put(next, row)); afterId = lastId;
             // A short page is not EOF: projects can configure limits below 500.
           }
-          latest = await fetchFingerprint?.(); assertCurrent(epoch);
+          latest = await fetchFingerprint?.(); assertRefreshCurrent();
           if (before === latest) break;
           if (attempt === 2) throw new Error("يتغير دليل المستفيدين أثناء التحميل. أعد المحاولة بعد انتهاء الاستيراد.");
         }
@@ -249,30 +263,34 @@ export function createBeneficiaryDirectory({
     },
     async poll({ force = false } = {}) {
       if (!scopeKey || !isOnline()) return;
-      if (!ready) { await directory.ensureReady(); return; }
-      const epoch = generation;
+      const epoch = generation, watch = watchingRevision;
+      if (!ready) { await directory.refresh({ watch }); return; }
       const latest = await fetchFingerprint?.(); assertCurrent(epoch);
+      if (watch !== watchingRevision) return;
       // Periodic reconciliation also removes deleted/reassigned rows after
       // missed Realtime events, including equal-count changes.
-      if (force || latest !== fingerprint || now() - lastFullSync >= 5 * 60_000) await directory.refresh();
+      if (force || latest !== fingerprint || now() - lastFullSync >= 5 * 60_000) await directory.refresh({ watch });
     },
     startWatching({ subscribe, pollMs = 45_000, onError = () => {} } = {}) {
       directory.stopWatching();
-      const epoch = generation;
-      const check = () => directory.poll().catch(onError);
+      const epoch = generation, watch = watchingRevision;
+      const check = () => {
+        if (watch === watchingRevision && epoch === generation) directory.poll().catch(onError);
+      };
       pollTimer = setInterval(check, pollMs);
       pollTimer?.unref?.();
       // Subscription merely listens: it never creates publications or policies.
       const stop = subscribe?.(payload => {
-        if (epoch !== generation) return;
+        if (epoch !== generation || watch !== watchingRevision) return;
         directory.handleRealtime(payload).catch(onError);
       }, status => {
-        if (epoch !== generation || status !== "SUBSCRIBED") return;
+        if (epoch !== generation || watch !== watchingRevision || status !== "SUBSCRIBED") return;
         clearTimeout(realtimeTimer); realtimeTimer = setTimeout(check, 250);
       });
       stopWatching = typeof stop === "function" ? stop : () => {};
     },
     stopWatching() {
+      watchingRevision += 1;
       clearInterval(pollTimer); clearTimeout(realtimeTimer); pollTimer = realtimeTimer = null;
       stopWatching(); stopWatching = () => {};
     }

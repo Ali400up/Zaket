@@ -18,6 +18,7 @@ import { formatPrivateValue } from "./screen-values.js";
 import { convertCurrency, deriveExchangeRate, buildCashFlowSummary } from "./currency-service.js";
 import { filterSearchOptions, shouldUseSearchableSelect, createLatestRequest } from "./searchable-select.js";
 import { healthMetric, describeHealthError } from "./system-health.js";
+import { loadDashboardSections } from "./dashboard-loader.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -25,6 +26,9 @@ import {
 
 const config = window.ZAKAT_CONFIG || {};
 const tableRequests = createLatestRequest();
+const dashboardRequests = createLatestRequest();
+let navigationRevision = 0;
+let foregroundNavigation = false;
 
 const routeMap = {
   dashboard: null,
@@ -211,7 +215,13 @@ function destroyCharts() {
 }
 
 function showLogin() {
+  navigationRevision += 1;
+  foregroundNavigation = false;
+  dataService.pauseBeneficiarySync();
+  notificationRefreshController?.abort();
+  clearTimeout(notificationRefreshTimer);
   tableRequests.cancel();
+  dashboardRequests.cancel();
   destroyCharts();
   state.notifications = [];
   state.notificationsLoaded = false;
@@ -222,7 +232,6 @@ function showLogin() {
 }
 
 function showApp() {
-  dataService.beneficiaryOptions().catch(() => null);
   els.loginView.classList.add("hidden");
   els.appShell.classList.remove("hidden");
   const profile = state.session.profile || {};
@@ -239,8 +248,16 @@ function showApp() {
   buildNavigation();
   updateConnectionStatus();
   updateQueueBadge();
-  navigate(location.hash.replace("#", "") || "dashboard", false);
-  scheduleNotificationRefresh();
+  const session = state.session;
+  // Complete the visible screen first; index warm-up and notification scans
+  // must not compete with its first exact counts and finance reads.
+  const navigation = navigate(location.hash.replace("#", "") || "dashboard", false);
+  const revision = navigationRevision;
+  navigation.then(async () => {
+    if (state.session !== session || revision !== navigationRevision) return;
+    await dataService.beneficiaryOptions().catch(() => null);
+    if (state.session === session && revision === navigationRevision) scheduleNotificationRefresh();
+  });
 }
 
 function renderMenuIcon(icon) {
@@ -259,7 +276,13 @@ function buildNavigation() {
 }
 
 async function navigate(screenId, updateHash = true) {
+  const revision = ++navigationRevision;
+  foregroundNavigation = true;
+  dataService.pauseBeneficiarySync();
+  notificationRefreshController?.abort();
+  clearTimeout(notificationRefreshTimer);
   tableRequests.cancel();
+  dashboardRequests.cancel();
   if (!routeMap.hasOwnProperty(screenId)) screenId = "dashboard";
   if (!canAccess(screenId)) {
     toast("لا تملك صلاحية فتح هذه الشاشة.", "error");
@@ -296,10 +319,18 @@ async function navigate(screenId, updateHash = true) {
       await renderDataScreen(screenConfigs[cfgKey]);
     }
   } catch (error) {
+    if (error?.name === "AbortError" || revision !== navigationRevision || state.currentScreen !== screenId) return;
     console.error(error);
     els.pageContent.innerHTML = `<div class="panel empty-state"><i class="fa-solid fa-triangle-exclamation"></i><h3>تعذر تحميل الشاشة</h3><p>${escapeHtml(error.message || "حدث خطأ غير متوقع")}</p><button class="primary-button" data-retry style="margin:16px auto 0">إعادة المحاولة</button></div>`;
   }
-  els.pageContent.focus({ preventScroll: true });
+  finally {
+    if (revision === navigationRevision && state.session) {
+      foregroundNavigation = false;
+      dataService.resumeBeneficiarySync().catch(error => console.warn("تعذر تشغيل مزامنة البحث", error));
+      scheduleNotificationRefresh();
+    }
+  }
+  if (revision === navigationRevision) els.pageContent.focus({ preventScroll: true });
 }
 
 function dashboardMetric(iconClass, color, label, value, foot, screen) {
@@ -309,18 +340,61 @@ function dashboardMetric(iconClass, color, label, value, foot, screen) {
   </button>`;
 }
 
+function dashboardQuerySpecs() {
+  const count = (key, label, table, filters = {}) => ({ key, label, load: ({ signal }) => dataService.count(table, { filters, signal }) });
+  const rows = (key, label, table, options) => ({ key, label, load: ({ signal }) => dataService.dashboardRows(table, { ...options, signal }) });
+  return [
+    count("approvedBeneficiaries", "عدد المستفيدين المعتمدين", "beneficiaries", { status: "approved" }),
+    count("totalBeneficiaries", "إجمالي ملفات المستفيدين", "beneficiaries"),
+    count("openCampaigns", "الحملات المفتوحة", "campaigns", { status: "open" }),
+    count("campaigns", "إجمالي الحملات", "campaigns"),
+    count("pendingCash", "الصرف النقدي تحت المراجعة", "cash_payments", { status: "under_review" }),
+    count("pendingInKind", "الصرف العيني تحت المراجعة", "in_kind_payments", { status: "under_review" }),
+    rows("receipts", "ملخص القبض النقدي", "cash_receipts", { columns: "id,amount,currency,status,receipt_date", filters: { status: "posted" }, all: true }),
+    rows("payments", "ملخص الصرف النقدي", "cash_payments", { columns: "id,amount,currency,status,payment_date", filters: { status: "posted" }, all: true }),
+    rows("items", "المخزون", "items", { source: "v_items_inventory", columns: "id,name,min_stock,available_qty", all: true }),
+    rows("recentReceipts", "أحدث سندات القبض", "cash_receipts", { source: "v_cash_receipts", columns: "id,voucher_no,receipt_date,created_at,amount,currency,status,donor_display_name,campaign_name", newest: true, maxRows: 6 }),
+    rows("recentPayments", "أحدث سندات الصرف", "cash_payments", { source: "v_cash_payments", columns: "id,voucher_no,payment_date,created_at,amount,currency,status,beneficiary_name,campaign_name", newest: true, maxRows: 6 }),
+    rows("beneficiaries", "فحص عينة هواتف المستفيدين", "beneficiaries", { columns: "id,phone", maxRows: 1000 })
+  ];
+}
+
+function dashboardSectionValue(snapshot, key, format) {
+  return snapshot[key]?.status === "success" ? format(snapshot[key].value) : "—";
+}
+
+function dashboardSectionMessage(snapshot, key) {
+  const section = snapshot[key];
+  if (section?.status === "success") return "";
+  if (section?.status === "error") return section.error?.code === "57014" || section.error?.code === "DASHBOARD_TIMEOUT"
+    ? "تأخر استعلام هذا القسم؛ أعد المحاولة." : "تعذر تحميل هذا القسم؛ أعد المحاولة.";
+  return section?.status === "retrying" ? "إعادة المحاولة تلقائياً..." : "جاري التحميل...";
+}
+
 async function renderDashboard() {
-  const [beneficiaries, campaigns, receipts, payments, items, pendingCash, pendingInKind, approvedBeneficiaries, totalBeneficiaries] = await Promise.all([
-    dataService.list("beneficiaries", { pageSize: 1000, networkOnly: true }),
-    dataService.list("campaigns", { pageSize: 1000 }),
-    dataService.list("cash_receipts", { pageSize: 1000 }),
-    dataService.list("cash_payments", { pageSize: 1000 }),
-    dataService.list("items", { pageSize: 1000 }),
-    dataService.list("cash_payments", { filters: { status: "under_review" }, pageSize: 20 }),
-    dataService.list("in_kind_payments", { filters: { status: "under_review" }, pageSize: 20 }),
-    dataService.count("beneficiaries", { filters: { status: "approved" } }),
-    dataService.count("beneficiaries")
-  ]);
+  const request = dashboardRequests.begin();
+  const session = state.session, profileId = String(session?.profile?.id || "");
+  const current = () => request.isCurrent() && state.currentScreen === "dashboard" && state.session === session && String(state.session?.profile?.id || "") === profileId;
+  try {
+    await loadDashboardSections(dashboardQuerySpecs(), {
+      signal: request.signal,
+      onUpdate: snapshot => { if (current()) renderDashboardContent(snapshot, current); }
+    });
+  } catch (error) { if (error?.name !== "AbortError" && current()) throw error; }
+}
+
+function renderDashboardContent(snapshot, current = () => true) {
+  const rows = key => snapshot[key]?.value || { data: [] };
+  const beneficiaries = rows("beneficiaries"), receipts = rows("receipts"), payments = rows("payments"), items = rows("items");
+  const recentReceipts = rows("recentReceipts"), recentPayments = rows("recentPayments");
+  const approvedBeneficiaries = snapshot.approvedBeneficiaries?.value;
+  const totalBeneficiaries = snapshot.totalBeneficiaries?.value;
+  const stockReady = snapshot.items?.status === "success";
+  const cashReady = snapshot.receipts?.status === "success" && snapshot.payments?.status === "success";
+  const pendingReady = snapshot.pendingCash?.status === "success" && snapshot.pendingInKind?.status === "success";
+  const errors = Object.values(snapshot).filter(section => section.status === "error");
+  const loading = Object.values(snapshot).some(section => ["loading", "retrying"].includes(section.status));
+  destroyCharts();
 
   const displayCurrency = state.dashboardCurrency;
   const finance = buildCashFlowSummary(receipts.data, payments.data, displayCurrency);
@@ -329,16 +403,14 @@ async function renderDashboard() {
   const currencyNames = typeof Intl.DisplayNames === "function" ? new Intl.DisplayNames(["ar"], { type: "currency" }) : null;
   const currencyOptions = currencyCodes.map(code => `<option value="${escapeHtml(code)}" ${code === displayCurrency ? "selected" : ""}>${escapeHtml(currencyNames?.of(code) || code)}</option>`).join("");
   const stockTotal = items.data.reduce((a, x) => a + Number(x.available_qty || 0), 0);
-  const activeBeneficiaries = approvedBeneficiaries.total;
-  const openCampaigns = campaigns.data.filter(x => x.status === "open").length;
   const profile = state.session.profile || {};
   const firstName = profile.full_name?.split(" ")[0] || "بك";
   const canAddBeneficiary = roleCanWrite("beneficiaries", "create");
   const canQuickDeliver = roleCanWrite("distribution_assignments", "create");
   const canAddInKindReceipt = roleCanWrite("in_kind_receipts", "create");
 
-  const recent = [...receipts.data.map(x => ({ ...x, kind: "قبض نقدي", amountText: formatCurrency(x.amount, x.currency), person: x.donor_name, icon: "fa-arrow-down", color: "green" })),
-    ...payments.data.map(x => ({ ...x, kind: "صرف نقدي", amountText: formatCurrency(x.amount, x.currency), person: x.beneficiary_name, icon: "fa-arrow-up", color: "blue" }))]
+  const recent = [...recentReceipts.data.map(x => ({ ...x, kind: "قبض نقدي", amountText: formatCurrency(x.amount, x.currency), person: x.donor_display_name, icon: "fa-arrow-down", color: "green" })),
+    ...recentPayments.data.map(x => ({ ...x, kind: "صرف نقدي", amountText: formatCurrency(x.amount, x.currency), person: x.beneficiary_name, icon: "fa-arrow-up", color: "blue" }))]
     .sort((a, b) => String(b.created_at || b.receipt_date || b.payment_date).localeCompare(String(a.created_at || a.receipt_date || a.payment_date))).slice(0, 6);
 
   const lowStock = items.data.filter(x => Number(x.available_qty || 0) <= Number(x.min_stock || 0));
@@ -348,26 +420,28 @@ async function renderDashboard() {
     if (seenPhones.has(row.phone)) return true;
     seenPhones.add(row.phone); return false;
   });
-  const pendingCount = pendingCash.total + pendingInKind.total;
+  const pendingCount = pendingReady ? snapshot.pendingCash.value.total + snapshot.pendingInKind.value.total : 0;
 
   els.pageContent.innerHTML = `
+    ${loading ? '<div class="info-callout" role="status">جاري التحميل التدريجي للأقسام؛ يمكنك استخدام الإجراءات المتاحة.</div>' : ""}
+    ${errors.length ? `<div class="info-callout" role="status"><strong>تعذر تحميل بعض الأقسام؛ بقية اللوحة متاحة.</strong><ul>${errors.map(section => `<li>${escapeHtml(section.label)}: ${escapeHtml(section.error?.message || "تعذر التحميل")} ${escapeHtml(section.error?.code || "")}</li>`).join("")}</ul><button class="secondary-button" data-retry>إعادة تحميل الأقسام</button></div>` : ""}
     <section class="welcome-banner">
       <div class="welcome-copy"><span><i class="fa-regular fa-sun" aria-hidden="true"></i> لوحة المتابعة اليومية</span><h2>مرحباً ${escapeHtml(firstName)}، إليك ملخص العمل.</h2><p>وقت العرض: ${formatDate(new Date().toISOString(), true)} • ${dataService.demoMode ? "بيانات تجريبية محلية" : isOnline() ? "وضع العمل المتصل" : "آخر بيانات محفوظة محلياً"}</p></div>
       <div class="welcome-actions">${canQuickDeliver ? `<button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button>` : ""}${canAddBeneficiary ? `<button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button>` : ""}</div>
     </section>
     <section class="metrics-grid">
-      ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", formatNumber(activeBeneficiaries), `${totalBeneficiaries.total} ملف مسجل${approvedBeneficiaries.source === "cache" ? " • آخر بيانات محفوظة" : ""}`, "beneficiaries")}
-      ${dashboardMetric("fa-solid fa-bullseye", "purple", "الحملات المفتوحة", formatNumber(openCampaigns), `${campaigns.total} حملة إجمالاً`, "campaigns")}
-      ${dashboardMetric("fa-solid fa-arrow-trend-down", "green", "المقبوض بالعملة المختارة", formatCurrency(finance.receivedTotal, displayCurrency), "من السندات المرحلة المحمّلة", "cash-receipts")}
-      ${dashboardMetric("fa-solid fa-arrow-trend-up", "amber", "المصروف بالعملة المختارة", formatCurrency(finance.spentTotal, displayCurrency), "من السندات المرحلة المحمّلة", "cash-payments")}
-      ${dashboardMetric("fa-solid fa-boxes-stacked", "red", "المخزون المتاح", formatNumber(stockTotal), `${lowStock.length} أصناف تحت الحد`, "inventory")}
+      ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", dashboardSectionValue(snapshot,"approvedBeneficiaries",value => formatNumber(value.total)), dashboardSectionMessage(snapshot,"approvedBeneficiaries") || `${totalBeneficiaries ? `${totalBeneficiaries.total} ملف مسجل` : dashboardSectionMessage(snapshot,"totalBeneficiaries")}${approvedBeneficiaries?.source === "cache" ? " • آخر بيانات محفوظة" : ""}`, "beneficiaries")}
+      ${dashboardMetric("fa-solid fa-bullseye", "purple", "الحملات المفتوحة", dashboardSectionValue(snapshot,"openCampaigns",value => formatNumber(value.total)), dashboardSectionMessage(snapshot,"openCampaigns") || (snapshot.campaigns?.value ? `${snapshot.campaigns.value.total} حملة إجمالاً` : dashboardSectionMessage(snapshot,"campaigns")), "campaigns")}
+      ${dashboardMetric("fa-solid fa-arrow-trend-down", "green", "المقبوض بالعملة المختارة", dashboardSectionValue(snapshot,"receipts",() => formatCurrency(finance.receivedTotal, displayCurrency)), dashboardSectionMessage(snapshot,"receipts") || "من السندات المرحلة المسموح بها", "cash-receipts")}
+      ${dashboardMetric("fa-solid fa-arrow-trend-up", "amber", "المصروف بالعملة المختارة", dashboardSectionValue(snapshot,"payments",() => formatCurrency(finance.spentTotal, displayCurrency)), dashboardSectionMessage(snapshot,"payments") || "من السندات المرحلة المسموح بها", "cash-payments")}
+      ${dashboardMetric("fa-solid fa-boxes-stacked", "red", "المخزون المتاح", stockReady ? formatNumber(stockTotal) : "—", stockReady ? `${lowStock.length} أصناف تحت الحد` : dashboardSectionMessage(snapshot,"items"), "inventory")}
     </section>
     <section class="dashboard-grid">
-      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-chart-line"></i></span><div><h3>حركة القبض والصرف</h3><p>آخر ستة أشهر من السندات المحمّلة، بالعملة المختارة</p></div></div><div class="panel-actions"><label class="cash-currency-control">عملة العرض<select class="form-control" data-cash-flow-currency>${currencyOptions}</select></label><button class="secondary-button" data-nav="reports"><i class="fa-solid fa-arrow-up-right-from-square"></i> التقارير</button></div></header><div class="panel-body"><div class="chart-wrap"><canvas id="cash-flow-chart"></canvas></div></div></article>
-      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bell"></i></span><div><h3>التنبيهات المهمة</h3><p>تحتاج إلى متابعة أو قرار</p></div></div><span class="status-badge under_review">${pendingCount + lowStock.length + duplicateCandidates.length} تنبيه</span></header><div class="panel-body"><div class="alert-list">
+      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-chart-line"></i></span><div><h3>حركة القبض والصرف</h3><p>آخر ستة أشهر من السندات المسموح بها، بالعملة المختارة</p></div></div><div class="panel-actions"><label class="cash-currency-control">عملة العرض<select class="form-control" data-cash-flow-currency>${currencyOptions}</select></label><button class="secondary-button" data-nav="reports"><i class="fa-solid fa-arrow-up-right-from-square"></i> التقارير</button></div></header><div class="panel-body">${cashReady ? '<div class="chart-wrap"><canvas id="cash-flow-chart"></canvas></div>' : `<div class="info-callout">${escapeHtml(dashboardSectionMessage(snapshot,"receipts") || dashboardSectionMessage(snapshot,"payments"))}</div>`}</div></article>
+      <article class="panel"><header class="panel-header"><div class="panel-title"><span class="title-icon"><i class="fa-solid fa-bell"></i></span><div><h3>التنبيهات المهمة</h3><p>تحتاج إلى متابعة أو قرار</p></div></div><span class="status-badge under_review">${pendingReady && stockReady && snapshot.beneficiaries?.status === "success" ? `${pendingCount + lowStock.length + duplicateCandidates.length} تنبيه` : "الفحص غير مكتمل"}</span></header><div class="panel-body"><div class="alert-list">
         ${lowStock.length ? `<div class="alert-item danger"><i class="fa-solid fa-box-open"></i><div class="alert-copy"><strong>مخزون منخفض</strong><span>${lowStock.map(x => x.name).slice(0, 3).join("، ")}</span></div><button data-nav="inventory">فتح</button></div>` : ""}
         ${pendingCount ? `<div class="alert-item warning"><i class="fa-solid fa-hourglass-half"></i><div class="alert-copy"><strong>عمليات تحت المراجعة</strong><span>${pendingCount} سند صرف ينتظر الاعتماد</span></div><button data-nav="cash-payments">فتح</button></div>` : ""}
-        ${duplicateCandidates.length ? `<div class="alert-item info"><i class="fa-solid fa-clone"></i><div class="alert-copy"><strong>تشابه في المستفيدين</strong><span>${duplicateCandidates.length} ملف يحتاج فحص التكرار</span></div><button data-nav="beneficiaries">فتح</button></div>` : ""}
+        ${duplicateCandidates.length ? `<div class="alert-item info"><i class="fa-solid fa-clone"></i><div class="alert-copy"><strong>تشابه في المستفيدين</strong><span>${duplicateCandidates.length} ملف في عينة اللوحة يحتاج فحص التكرار</span></div><button data-nav="beneficiaries">فتح</button></div>` : ""}
         <div class="alert-item info"><i class="fa-solid fa-cloud-arrow-up"></i><div class="alert-copy"><strong>حالة المزامنة</strong><span>${isOnline() ? "الاتصال متاح؛ راجع قائمة المزامنة" : "الجهاز غير متصل حالياً"}</span></div><button data-nav="sync">عرض</button></div>
       </div></div></article>
     </section>
@@ -384,12 +458,15 @@ async function renderDashboard() {
   els.pageContent.querySelector("[data-cash-flow-currency]").addEventListener("change", event => {
     state.dashboardCurrency = event.target.value;
     const selected = buildCashFlowSummary(receipts.data, payments.data, state.dashboardCurrency);
-    els.pageContent.querySelector('.metric-card[data-nav="cash-receipts"] .metric-value').textContent = formatCurrency(selected.receivedTotal, state.dashboardCurrency);
-    els.pageContent.querySelector('.metric-card[data-nav="cash-payments"] .metric-value').textContent = formatCurrency(selected.spentTotal, state.dashboardCurrency);
+    els.pageContent.querySelector('.metric-card[data-nav="cash-receipts"] .metric-value').textContent = snapshot.receipts?.status === "success" ? formatCurrency(selected.receivedTotal, state.dashboardCurrency) : "—";
+    els.pageContent.querySelector('.metric-card[data-nav="cash-payments"] .metric-value').textContent = snapshot.payments?.status === "success" ? formatCurrency(selected.spentTotal, state.dashboardCurrency) : "—";
     destroyCharts();
-    createCashFlowChart(receipts.data, payments.data, state.dashboardCurrency);
+    if (cashReady && current()) createCashFlowChart(receipts.data, payments.data, state.dashboardCurrency);
   });
-  requestAnimationFrame(() => createCashFlowChart(receipts.data, payments.data, state.dashboardCurrency));
+  const canvas = document.getElementById("cash-flow-chart");
+  requestAnimationFrame(() => {
+    if (cashReady && current() && canvas && document.getElementById("cash-flow-chart") === canvas) createCashFlowChart(receipts.data, payments.data, state.dashboardCurrency);
+  });
 }
 
 function createCashFlowChart(receipts, payments, currency) {
@@ -2047,7 +2124,6 @@ async function restoreBackupFile(file) {
 
 async function refreshCurrentScreen() {
   await navigate(state.currentScreen, false);
-  scheduleNotificationRefresh();
 }
 
 function updateConnectionStatus() {
@@ -2083,12 +2159,12 @@ function updateNotificationBadge() {
 
 function notificationQuerySpecs() {
   const specs = [];
-  const add = (key, table, options = {}) => specs.push({ key, promise: dataService.list(table, options) });
+  const add = (key, table, options = {}) => specs.push({ key, load: ({ signal }) => dataService.list(table, { ...options, signal }) });
   if (canAccess("inventory") || canAccess("stock-balances")) {
     add("items", "items", { pageSize: 1000 });
     add("inventoryLots", "inventory_lots", { pageSize: 1000 });
   }
-  if (canAccess("beneficiaries")) add("beneficiaries", "beneficiaries", { pageSize: 1000 });
+  if (canAccess("beneficiaries")) specs.push({ key: "beneficiaries", load: ({ signal }) => dataService.dashboardRows("beneficiaries", { columns: "id,phone", maxRows: 1000, signal }) });
   if (state.session?.profile?.role === "admin") add("devices", "authorized_devices", { filters: { status: "pending" }, pageSize: 250 });
   if (canAccess("settings")) add("settings", "system_settings", { pageSize: 1 });
   [
@@ -2102,15 +2178,15 @@ function notificationQuerySpecs() {
   return specs;
 }
 
-async function loadNotificationSnapshot() {
+async function loadNotificationSnapshot({ signal } = {}) {
   const specs = notificationQuerySpecs();
-  const settled = await Promise.allSettled(specs.map(spec => spec.promise));
+  const snapshot = await loadDashboardSections(specs, { signal, concurrency: 2, retries: 0 });
   const loaded = {};
   const pendingDocuments = [];
-  settled.forEach((result, index) => {
-    const key = specs[index].key;
-    if (result.status === "rejected") {
-      console.warn(`تعذر تحديث مصدر التنبيهات ${key}`, result.reason);
+  specs.forEach(({ key }) => {
+    const result = snapshot[key];
+    if (result.status !== "success") {
+      console.warn(`تعذر تحديث مصدر التنبيهات ${key}`, result.error);
       return;
     }
     const rows = result.value?.data || [];
@@ -2130,6 +2206,8 @@ async function loadNotificationSnapshot() {
 }
 
 function renderNotificationDrawer() {
+  if (document.getElementById("drawer-title")?.textContent !== "مركز التنبيهات" ||
+      document.getElementById("drawer-root")?.classList.contains("hidden")) return;
   const body = document.getElementById("drawer-body");
   if (!body) return;
   body.innerHTML = state.notificationLoading && !state.notificationsLoaded
@@ -2138,38 +2216,48 @@ function renderNotificationDrawer() {
 }
 
 let notificationRefreshPromise = null;
+let notificationRefreshController = null;
 async function refreshNotifications({ updateDrawer = false } = {}) {
   if (!state.session) return;
+  if (foregroundNavigation) { scheduleNotificationRefresh(); return; }
   if (notificationRefreshPromise) {
-    await notificationRefreshPromise;
+    try { await notificationRefreshPromise; }
+    catch (error) { if (error?.name !== "AbortError") throw error; else return; }
     if (updateDrawer) renderNotificationDrawer();
     return;
   }
   const profileId = String(state.session.profile?.id || state.session.user?.id || "");
+  const controller = new AbortController();
+  notificationRefreshController = controller;
   state.notificationLoading = true;
   document.getElementById("notifications-button")?.classList.add("is-loading");
   if (updateDrawer) renderNotificationDrawer();
   try {
-    notificationRefreshPromise = loadNotificationSnapshot();
+    notificationRefreshPromise = loadNotificationSnapshot({ signal: controller.signal });
     const snapshot = await notificationRefreshPromise;
     const currentProfileId = String(state.session?.profile?.id || state.session?.user?.id || "");
-    if (currentProfileId && currentProfileId === profileId) {
+    if (!controller.signal.aborted && currentProfileId && currentProfileId === profileId) {
       state.notifications = buildNotifications(snapshot);
       state.notificationsLoaded = true;
       updateNotificationBadge();
     }
+  } catch (error) {
+    if (error?.name !== "AbortError") throw error;
   } finally {
+    notificationRefreshController = null;
     notificationRefreshPromise = null;
     state.notificationLoading = false;
     document.getElementById("notifications-button")?.classList.remove("is-loading");
-    if (updateDrawer) renderNotificationDrawer();
+    renderNotificationDrawer();
   }
 }
 
 let notificationRefreshTimer;
 function scheduleNotificationRefresh() {
   clearTimeout(notificationRefreshTimer);
+  if (foregroundNavigation || !state.session) return;
   notificationRefreshTimer = setTimeout(() => {
+    if (foregroundNavigation || !state.session) return;
     refreshNotifications().catch(error => console.warn("تعذر تحديث مركز التنبيهات", error));
   }, 240);
 }
@@ -2306,7 +2394,7 @@ function bindEvents() {
     document.getElementById("quick-beneficiary-name")?.dispatchEvent(new Event("input", { bubbles: true }));
   }, 150);
   window.addEventListener("zakat:beneficiary-index-change", refreshIndexResults);
-  window.addEventListener("zakat:charts-ready", () => { if (state.currentScreen === "dashboard" && state.session) renderDashboard(); });
+  window.addEventListener("zakat:charts-ready", () => { if (state.currentScreen === "dashboard" && state.session) navigate("dashboard", false); });
   window.addEventListener("zakat:assistant-ui-command", event => {
     const command = event.detail || {};
     if (command.type === "navigate" && typeof command.screen_id === "string") {
@@ -2399,9 +2487,9 @@ async function init() {
   if (!dataService.demoMode) document.getElementById("demo-login-note").classList.add("hidden");
   bindEvents();
   await dataService.initialize();
+  await checkConnectivity({ timeout: 2500, silent: true }).catch(() => null);
   state.session = await dataService.getSession();
   if (state.session) showApp(); else showLogin();
-  checkConnectivity({ timeout: 2500, silent: true }).catch(() => null);
 }
 
 init().catch(error => {

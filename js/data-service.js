@@ -164,11 +164,26 @@ const beneficiaryDirectory = createBeneficiaryDirectory({
   }
 });
 
+// Automatic sync starts only after the foreground screen has settled. Explicit
+// search and successful mutations remain available while watching is paused.
+let beneficiaryBackgroundPaused = true;
+let beneficiaryWatchingKey = "";
+function pauseBeneficiarySync() {
+  beneficiaryBackgroundPaused = true;
+  beneficiaryWatchingKey = "";
+  beneficiaryDirectory.stopWatching();
+}
+function pollBeneficiariesInBackground() {
+  if (!beneficiaryBackgroundPaused) beneficiaryDirectory.poll().catch(() => null);
+}
+
 async function bindBeneficiaryDirectory(session = readStoredSession()) {
   const scope = currentBeneficiaryScope(session);
   const changed = beneficiaryDirectory.scopeKey !== beneficiaryCacheScope(scope);
   await beneficiaryDirectory.activate(scope);
-  if (changed && scope) {
+  if (!scope) beneficiaryWatchingKey = "";
+  if (scope && !beneficiaryBackgroundPaused && (changed || beneficiaryWatchingKey !== beneficiaryDirectory.scopeKey)) {
+    beneficiaryWatchingKey = beneficiaryDirectory.scopeKey;
     beneficiaryDirectory.startWatching({
       onError: error => { if (error?.name !== "AbortError") console.warn("تعذر تحديث فهرس المستفيدين", error.message || error); },
       subscribe: supabase && isSupabaseConfigured ? (onEvent, onStatus) => {
@@ -947,6 +962,7 @@ export const dataService = {
       supabase.auth.onAuthStateChange((event, session) => {
         const changedAccount = session?.user?.id && sessionProfileId(readStoredSession()) && session.user.id !== sessionProfileId(readStoredSession());
         if (event === "SIGNED_OUT" || changedAccount) {
+          pauseBeneficiarySync();
           beneficiaryDirectory.clear().catch(() => null);
           localStorage.removeItem(OFFLINE_SESSION_KEY);
           localStorage.removeItem(LIVE_CACHE_KEY);
@@ -955,10 +971,10 @@ export const dataService = {
       });
     };
     watchAuth(); window.addEventListener("zakat:supabase-ready", watchAuth);
-    window.addEventListener("online", () => beneficiaryDirectory.poll().catch(() => null));
-    window.addEventListener("zakat:connection-change", event => { if (event.detail?.online) beneficiaryDirectory.poll().catch(() => null); });
+    window.addEventListener("online", pollBeneficiariesInBackground);
+    window.addEventListener("zakat:connection-change", event => { if (event.detail?.online) pollBeneficiariesInBackground(); });
     if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
-      if (document.visibilityState === "visible") beneficiaryDirectory.poll().catch(() => null);
+      if (document.visibilityState === "visible") pollBeneficiariesInBackground();
     });
     if ("serviceWorker" in navigator) {
       try { await navigator.serviceWorker.register("/service-worker.js"); } catch {                }
@@ -967,7 +983,14 @@ export const dataService = {
     return true;
   },
 
+  pauseBeneficiarySync,
+  async resumeBeneficiarySync() {
+    beneficiaryBackgroundPaused = false;
+    await bindBeneficiaryDirectory();
+  },
+
   async signIn(identifier, password, remember = true) {
+    pauseBeneficiarySync();
     const phone = String(identifier || "").replace(/[^0-9+]/g, "");
     if (!phone || password.length < 6) throw new Error("تعذر تسجيل الدخول. تحقق من البيانات أو الاتصال ثم حاول مجدداً.");
     await beneficiaryDirectory.clear();
@@ -1023,6 +1046,7 @@ export const dataService = {
   },
 
   async signOut() {
+    pauseBeneficiarySync();
     const sessionId = localStorage.getItem(USER_SESSION_KEY);
     await beneficiaryDirectory.clear();
     try {
@@ -1124,6 +1148,8 @@ export const dataService = {
 
   async count(table, options = {}) {
     const { filters = {} } = options;
+    if (options.signal?.aborted) throw new DOMException("Count superseded", "AbortError");
+    const scopeKey = beneficiaryCacheScope(currentBeneficiaryScope());
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       let rows = scopeRowsForSession(table, db[table] || [], readStoredSession(), db.delegates || []);
@@ -1137,10 +1163,52 @@ export const dataService = {
     let query = supabase.from(table).select("id", { count: "exact", head: true });
     if (table === "beneficiaries") query = scopeBeneficiaryQuery(query);
     Object.entries(filters).forEach(([key, value]) => { if (value != null && value !== "") query = query.eq(key, value); });
+    if (options.signal) query = query.abortSignal(options.signal);
     const { count, error } = await query;
+    if (options.signal?.aborted || scopeKey !== beneficiaryCacheScope(currentBeneficiaryScope())) throw new DOMException("Count superseded", "AbortError");
     if (error) throw error;
     if (count == null) throw new Error("تعذر الحصول على العدد الحقيقي من الخادم.");
     return { total: count, source: "network" };
+  },
+
+  async dashboardRows(table, options = {}) {
+    const { columns = "id", source = table, filters = {}, all = false, maxRows = 6, pageSize = 250, signal, newest = false } = options;
+    if (signal?.aborted) throw new DOMException("Dashboard superseded", "AbortError");
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      let rows = scopeRowsForSession(table, (db[table] || []).map(row => enrichDemoRow(db, table, row)), readStoredSession(), db.delegates || []);
+      Object.entries(filters).forEach(([key,value]) => { if (value != null && value !== "") rows = rows.filter(row => String(row[key]) === String(value)); });
+      rows.sort((a,b) => newest ? String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(a.id).localeCompare(String(b.id)) : String(a.id).localeCompare(String(b.id)));
+      return { data: (all ? rows : rows.slice(0,maxRows)).map(row => Object.fromEntries(columns.split(",").map(key => [key,row[key]]))), source: "demo" };
+    }
+    if (!supabase || !isOnline()) throw new Error("هذا القسم يحتاج اتصالاً بالخادم.");
+    const key = beneficiaryCacheScope(currentBeneficiaryScope());
+    const session = readStoredSession();
+    const size = Math.max(1, Math.min(500, Number(pageSize) || 250));
+    const data = []; let afterId = null;
+    while (all || data.length < maxRows) {
+      const limit = all ? size : Math.min(size, maxRows - data.length);
+      let query = supabase.from(source).select(columns);
+      if (table === "beneficiaries") query = scopeBeneficiaryQuery(query,session);
+      else if (DISTRIBUTOR_SCOPED_TABLES.has(table) && session?.profile?.role === "distributor") query = session.profile.delegate_id
+        ? query.eq("delegate_id",session.profile.delegate_id) : query.eq("id","00000000-0000-0000-0000-000000000000");
+      Object.entries(filters).forEach(([field,value]) => { if (value != null && value !== "") query = query.eq(field,value); });
+      if (newest) query = query.order("created_at",{ ascending: false });
+      query = query.order("id",{ ascending: true }).range(0,limit-1);
+      if (afterId) query = query.gt("id",afterId);
+      if (signal) query = query.abortSignal(signal);
+      const { data: batch, error } = await query;
+      if (signal?.aborted || key !== beneficiaryCacheScope(currentBeneficiaryScope())) throw new DOMException("Dashboard superseded", "AbortError");
+      if (error) throw error;
+      if (!batch?.length) break;
+      data.push(...batch);
+      // Recent rows are an explicitly limited preview. Complete datasets use ID keysets.
+      if (newest) break;
+      const lastId = String(batch.at(-1).id || "");
+      if (!lastId || (afterId && lastId <= afterId)) throw new Error("تعذر ترتيب بيانات لوحة التحكم.");
+      afterId = lastId;
+    }
+    return { data, source: "network" };
   },
 
   async searchBeneficiaries(search = "", options = {}) {
