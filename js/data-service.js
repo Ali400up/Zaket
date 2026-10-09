@@ -11,6 +11,7 @@ import { enrichInKindDetails } from "./in-kind-valuation.js";
 import { markSessionResume, shouldRecordSessionResume } from "./session-audit.js";
 import { requestSystemHealth } from "./system-health.js";
 import { storageKey } from "./storage-scope.js";
+import { createBeneficiaryDirectory, beneficiaryCacheScope, BENEFICIARY_INDEX_FIELDS } from "./beneficiary-directory.js";
 
 const DB_KEY = storageKey("demo_database");
 const SESSION_KEY = storageKey("demo_session");
@@ -28,7 +29,7 @@ function getLiveBackupManager() {
 const LIVE_CACHE_KEY = storageKey("live_cache");
 const OFFLINE_SESSION_KEY = storageKey("offline_session");
 const USER_SESSION_KEY = storageKey("active_user_session");
-const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiaries","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","currencies","currency_exchanges","units","items","warehouses","stock_balances","system_settings"]);
+const CACHE_TABLES = new Set(["profiles","branches","delegates","beneficiary_categories","health_conditions","campaigns","campaign_distributors","cashboxes","cashbox_users","currencies","currency_exchanges","units","items","warehouses","stock_balances","system_settings"]);
 const DISTRIBUTOR_SCOPED_TABLES = new Set(["beneficiaries", "cash_payments", "in_kind_payments", "distribution_assignments"]);
 const BACKUP_V3_BUSINESS_TABLES = [
   "branches","profiles","delegates","donors","beneficiary_categories","health_conditions",
@@ -101,6 +102,129 @@ function cachedRows(table, session = readStoredSession()) {
   if (!isCacheEntryOwnedBySession(entry, session, getDeviceFingerprint())) return [];
   return Array.isArray(entry.rows) ? entry.rows : [];
 }
+
+const beneficiaryDetails = new Map();
+function currentBeneficiaryScope(session = readStoredSession()) {
+  const profile = session?.profile;
+  if (!profile?.id || profile.is_active === false) return null;
+  return {
+    project: isSupabaseConfigured ? config.supabaseUrl : "demo", userId: sessionProfileId(session),
+    role: profile.role, delegateId: profile.delegate_id, branchId: profile.branch_id, device: getDeviceFingerprint()
+  };
+}
+function scopeBeneficiaryQuery(query, session = readStoredSession()) {
+  if (session?.profile?.role === "distributor") {
+    query = session.profile.delegate_id
+      ? query.eq("delegate_id", session.profile.delegate_id)
+      : query.eq("id", "00000000-0000-0000-0000-000000000000");
+  }
+  return query;
+}
+const beneficiaryDirectory = createBeneficiaryDirectory({
+  isOnline: () => !isSupabaseConfigured || Boolean(supabase && isOnline()),
+  async fetchPage({ afterId, limit }) {
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      return scopeRowsForSession("beneficiaries", db.beneficiaries || [], readStoredSession(), db.delegates || [])
+        .filter(row => !afterId || String(row.id) > afterId)
+        .sort((a,b) => String(a.id).localeCompare(String(b.id))).slice(0, limit);
+    }
+    let query = scopeBeneficiaryQuery(supabase.from("beneficiaries").select(BENEFICIARY_INDEX_FIELDS))
+      .order("id", { ascending: true }).range(0, limit - 1);
+    if (afterId) query = query.gt("id", afterId);
+    const { data, error } = await query;
+    if (error) throw error;
+    return data || [];
+  },
+  async fetchById(id) {
+    if (!isSupabaseConfigured) return findById(ensureDemoDb(), "beneficiaries", id) || null;
+    const { data, error } = await scopeBeneficiaryQuery(supabase.from("beneficiaries").select(BENEFICIARY_INDEX_FIELDS).eq("id", id)).maybeSingle();
+    if (error) throw error;
+    return data;
+  },
+  async fetchFingerprint() {
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      const rows = scopeRowsForSession("beneficiaries", db.beneficiaries || [], readStoredSession(), db.delegates || []);
+      const latest = rows.map(row => `${row.updated_at || ""}:${row.id}`).sort().at(-1) || "";
+      return `${rows.length}|${latest}`;
+    }
+    const results = await Promise.all([
+      scopeBeneficiaryQuery(supabase.from("beneficiaries").select("id", { count: "exact", head: true })),
+      scopeBeneficiaryQuery(supabase.from("beneficiaries").select("id,updated_at"))
+        .order("updated_at", { ascending: false }).order("id", { ascending: false }).limit(1)
+    ]);
+    results.forEach(result => { if (result.error) throw result.error; });
+    if (results[0].count == null) throw new Error("تعذر التحقق من عدد ملفات المستفيدين.");
+    return `${results[0].count}|${results[1].data?.[0]?.updated_at || ""}|${results[1].data?.[0]?.id || ""}`;
+  },
+  onChange() {
+    beneficiaryDetails.clear();
+    window.dispatchEvent(new CustomEvent("zakat:beneficiary-index-change"));
+  }
+});
+
+async function bindBeneficiaryDirectory(session = readStoredSession()) {
+  const scope = currentBeneficiaryScope(session);
+  const changed = beneficiaryDirectory.scopeKey !== beneficiaryCacheScope(scope);
+  await beneficiaryDirectory.activate(scope);
+  if (changed && scope) {
+    beneficiaryDirectory.startWatching({
+      onError: error => { if (error?.name !== "AbortError") console.warn("تعذر تحديث فهرس المستفيدين", error.message || error); },
+      subscribe: supabase && isSupabaseConfigured ? (onEvent, onStatus) => {
+        const channel = supabase.channel(`beneficiary-search:${scope.userId}:${crypto.randomUUID()}`)
+          .on("postgres_changes", { event: "*", schema: "public", table: "beneficiaries" }, onEvent)
+          .subscribe(onStatus);
+        return () => { supabase.removeChannel(channel).catch(() => null); };
+      } : undefined
+    });
+  }
+}
+
+async function beginBeneficiaryOperation(table) {
+  if (table !== "beneficiaries") return null;
+  const key = beneficiaryCacheScope(currentBeneficiaryScope());
+  await bindBeneficiaryDirectory();
+  const token = beneficiaryDirectory.capture();
+  if (!key || token.scopeKey !== key || beneficiaryCacheScope(currentBeneficiaryScope()) !== key) throw new DOMException("Account changed", "AbortError");
+  return token;
+}
+
+async function beneficiarySaved(table, row, removedId, token) {
+  if (table !== "beneficiaries" || row?._queued) return;
+  if (!beneficiaryDirectory.isCurrent(token) || token.scopeKey !== beneficiaryCacheScope(currentBeneficiaryScope())) return;
+  await beneficiaryDirectory.change(row, removedId);
+  if (beneficiaryDirectory.isCurrent(token)) window.dispatchEvent(new CustomEvent("zakat:data-change"));
+}
+
+async function hydrateBeneficiaryPage(result, signal) {
+  if (!isSupabaseConfigured) {
+    const db = ensureDemoDb();
+    return { ...result, data: result.data.map(row => enrichDemoRow(db, "beneficiaries", findById(db, "beneficiaries", row.id) || row)) };
+  }
+  if (!supabase || !isOnline()) return { ...result, source: "cache" };
+  const token = beneficiaryDirectory.capture();
+  const pageRows = new Map(result.data.filter(row => beneficiaryDetails.get(row.id)?.updated_at === row.updated_at).map(row => [row.id, beneficiaryDetails.get(row.id)]));
+  const missing = result.data.filter(row => beneficiaryDetails.get(row.id)?.updated_at !== row.updated_at);
+  for (let offset = 0; offset < missing.length; offset += 100) {
+    const ids = missing.slice(offset, offset + 100).map(row => row.id);
+    let query = scopeBeneficiaryQuery(supabase.from("v_beneficiaries").select("*").in("id", ids));
+    if (signal) query = query.abortSignal(signal);
+    const { data, error } = await query;
+    if (!beneficiaryDirectory.isCurrent(token) || signal?.aborted) throw new DOMException("Search superseded", "AbortError");
+    if (error) throw error;
+    const found = new Set((data || []).map(row => String(row.id)));
+    // Missing rows were deleted or their RLS visibility changed on the server.
+    for (const id of ids) if (!found.has(id)) await beneficiaryDirectory.change(null, id);
+    (data || []).forEach(row => {
+      pageRows.set(String(row.id), row);
+      beneficiaryDetails.set(String(row.id), row);
+      while (beneficiaryDetails.size > 200) beneficiaryDetails.delete(beneficiaryDetails.keys().next().value);
+    });
+  }
+  return { ...result, data: result.data.map(row => pageRows.get(row.id)).filter(Boolean), source: "index" };
+}
+
 async function refreshCachedSettings() {
   if (!supabase || !isOnline()) return;
   const { data, error } = await supabase.from("v_system_settings").select("*").eq("id", 1).maybeSingle();
@@ -812,6 +936,30 @@ export const dataService = {
 
   async initialize() {
     if (!isSupabaseConfigured) ensureDemoDb();
+    const legacyCache = readLiveCache();
+    if (legacyCache.beneficiaries) {
+      delete legacyCache.beneficiaries;
+      localStorage.setItem(LIVE_CACHE_KEY, JSON.stringify(legacyCache));
+    }
+    const watchAuth = () => {
+      if (!supabase || this._beneficiaryAuthClient === supabase) return;
+      this._beneficiaryAuthClient = supabase;
+      supabase.auth.onAuthStateChange((event, session) => {
+        const changedAccount = session?.user?.id && sessionProfileId(readStoredSession()) && session.user.id !== sessionProfileId(readStoredSession());
+        if (event === "SIGNED_OUT" || changedAccount) {
+          beneficiaryDirectory.clear().catch(() => null);
+          localStorage.removeItem(OFFLINE_SESSION_KEY);
+          localStorage.removeItem(LIVE_CACHE_KEY);
+          window.dispatchEvent(new CustomEvent("zakat:auth-account-change"));
+        }
+      });
+    };
+    watchAuth(); window.addEventListener("zakat:supabase-ready", watchAuth);
+    window.addEventListener("online", () => beneficiaryDirectory.poll().catch(() => null));
+    window.addEventListener("zakat:connection-change", event => { if (event.detail?.online) beneficiaryDirectory.poll().catch(() => null); });
+    if (typeof document !== "undefined") document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") beneficiaryDirectory.poll().catch(() => null);
+    });
     if ("serviceWorker" in navigator) {
       try { await navigator.serviceWorker.register("/service-worker.js"); } catch {                }
     }
@@ -822,6 +970,7 @@ export const dataService = {
   async signIn(identifier, password, remember = true) {
     const phone = String(identifier || "").replace(/[^0-9+]/g, "");
     if (!phone || password.length < 6) throw new Error("تعذر تسجيل الدخول. تحقق من البيانات أو الاتصال ثم حاول مجدداً.");
+    await beneficiaryDirectory.clear();
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       const storedProfile = db.profiles.find(p => String(p.phone || "").replace(/[^0-9+]/g, "") === phone) || db.profiles[0];
@@ -836,6 +985,7 @@ export const dataService = {
       db.login_attempts.unshift({ id: uid("la"), attempted_at: new Date().toISOString(), phone, device_name: getDeviceName(), ip_address: "محلي", result: "success", lockout_until: null });
       writeDemoDb(db);
       localStorage.setItem(SESSION_KEY, JSON.stringify(session));
+      await bindBeneficiaryDirectory(session);
       return session;
     }
     if (!supabase) throw new Error("لا يمكن تسجيل الدخول الآن لأن مكتبة الاتصال غير متاحة. تحقق من الشبكة ثم أعد المحاولة.");
@@ -868,11 +1018,13 @@ export const dataService = {
     if (typeof sessionStorage !== "undefined") markSessionResume(sessionStorage, signedInSessionId);
     localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: data.user.id }, profile, deviceFingerprint: fp, cachedAt: new Date().toISOString() }));
     await refreshCachedSettings();
+    await bindBeneficiaryDirectory(result);
     return result;
   },
 
   async signOut() {
     const sessionId = localStorage.getItem(USER_SESSION_KEY);
+    await beneficiaryDirectory.clear();
     try {
       if (!isSupabaseConfigured) {
         const db = ensureDemoDb();
@@ -893,7 +1045,7 @@ export const dataService = {
   async getSession() {
     if (!isSupabaseConfigured) {
       const session = JSON.parse(localStorage.getItem(SESSION_KEY) || "null");
-      if (session?.expiresAt && session.expiresAt < Date.now()) { localStorage.removeItem(SESSION_KEY); return null; }
+      if (session?.expiresAt && session.expiresAt < Date.now()) { localStorage.removeItem(SESSION_KEY); await beneficiaryDirectory.clear(); return null; }
       const markerId = `demo-${session?.profile?.id || ""}`;
       if (session?.profile?.id && typeof sessionStorage !== "undefined" && shouldRecordSessionResume(sessionStorage, markerId)) {
         const db = ensureDemoDb();
@@ -902,12 +1054,15 @@ export const dataService = {
         writeDemoDb(db);
         markSessionResume(sessionStorage, markerId);
       }
+      await bindBeneficiaryDirectory(session);
       return session;
     }
     if (!isOnline()) {
       try {
         const cached = JSON.parse(localStorage.getItem(OFFLINE_SESSION_KEY) || "null");
-        return cached?.deviceFingerprint === getDeviceFingerprint() ? cached : null;
+        const session = cached?.deviceFingerprint === getDeviceFingerprint() ? cached : null;
+        await bindBeneficiaryDirectory(session);
+        return session;
       } catch { return null; }
     }
     try {
@@ -915,9 +1070,14 @@ export const dataService = {
       if (!session) {
         localStorage.removeItem(OFFLINE_SESSION_KEY);
         localStorage.removeItem(LIVE_CACHE_KEY);
+        await beneficiaryDirectory.clear();
         return null;
       }
       const profile = await liveProfileCapabilities(await getCurrentProfile(session.user.id));
+      if (!profile?.id || profile.is_active === false) {
+        localStorage.removeItem(OFFLINE_SESSION_KEY); localStorage.removeItem(LIVE_CACHE_KEY);
+        await beneficiaryDirectory.clear(); return null;
+      }
       const restoredSessionId = authSessionId(session);
       if (typeof sessionStorage !== "undefined" && shouldRecordSessionResume(sessionStorage, restoredSessionId)) {
         const { data: resumedSession, error: resumeError } = await supabase.rpc("resume_authenticated_session", {
@@ -932,12 +1092,15 @@ export const dataService = {
       const result = { ...session, profile };
       localStorage.setItem(OFFLINE_SESSION_KEY, JSON.stringify({ user: { id: session.user.id }, profile, deviceFingerprint: getDeviceFingerprint(), cachedAt: new Date().toISOString() }));
       await refreshCachedSettings();
+      await bindBeneficiaryDirectory(result);
       return result;
     } catch {
-      if (isOnline()) return null;
+      if (isOnline()) { await beneficiaryDirectory.clear(); return null; }
       try {
         const cached = JSON.parse(localStorage.getItem(OFFLINE_SESSION_KEY) || "null");
-        return cached?.deviceFingerprint === getDeviceFingerprint() ? cached : null;
+        const session = cached?.deviceFingerprint === getDeviceFingerprint() ? cached : null;
+        await bindBeneficiaryDirectory(session);
+        return session;
       } catch { return null; }
     }
   },
@@ -959,7 +1122,51 @@ export const dataService = {
     return true;
   },
 
+  async count(table, options = {}) {
+    const { filters = {} } = options;
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      let rows = scopeRowsForSession(table, db[table] || [], readStoredSession(), db.delegates || []);
+      Object.entries(filters).forEach(([key, value]) => { if (value != null && value !== "") rows = rows.filter(row => String(row[key]) === String(value)); });
+      return { total: rows.length, source: "demo" };
+    }
+    if (!supabase || !isOnline()) {
+      if (table === "beneficiaries") { await bindBeneficiaryDirectory(); await beneficiaryDirectory.ensureReady(); return { total: beneficiaryDirectory.query("", { filters }).total, source: "cache" }; }
+      throw new Error("عدّ السجلات يحتاج اتصالاً بالخادم.");
+    }
+    let query = supabase.from(table).select("id", { count: "exact", head: true });
+    if (table === "beneficiaries") query = scopeBeneficiaryQuery(query);
+    Object.entries(filters).forEach(([key, value]) => { if (value != null && value !== "") query = query.eq(key, value); });
+    const { count, error } = await query;
+    if (error) throw error;
+    if (count == null) throw new Error("تعذر الحصول على العدد الحقيقي من الخادم.");
+    return { total: count, source: "network" };
+  },
+
+  async searchBeneficiaries(search = "", options = {}) {
+    await bindBeneficiaryDirectory();
+    await beneficiaryDirectory.ensureReady();
+    if (options.signal?.aborted) throw new DOMException("Search superseded", "AbortError");
+    return beneficiaryDirectory.query(search, options);
+  },
+
+  async beneficiaryOptions(filters = {}) {
+    await bindBeneficiaryDirectory(); await beneficiaryDirectory.ensureReady();
+    return beneficiaryDirectory.all(filters);
+  },
+
+  async refreshBeneficiaries() {
+    await bindBeneficiaryDirectory(); await beneficiaryDirectory.refresh();
+  },
+
   async list(table, options = {}) {
+    const indexFields = BENEFICIARY_INDEX_FIELDS.split(",");
+    const indexedOptions = Object.keys(options.filters || {}).every(field => indexFields.includes(field))
+      && (!options.dateKey || indexFields.includes(options.dateKey)) && (!options.orderBy || indexFields.includes(options.orderBy));
+    if (table === "beneficiaries" && indexedOptions && !options.networkOnly && options.searchMode !== "all") {
+      const result = await this.searchBeneficiaries(options.search || "", { ...options, orderBy: options.orderBy || "created_at", ascending: options.ascending ?? false });
+      return hydrateBeneficiaryPage(result, options.signal);
+    }
     const { search = "", filters = {}, page = 1, pageSize = 500, orderBy = null, ascending = false, dateKey = null, dateFrom = "", dateTo = "" } = options;
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
@@ -988,6 +1195,7 @@ export const dataService = {
     }
 
     if (!supabase || !isOnline()) {
+      if (table === "beneficiaries" && (!indexedOptions || options.searchMode === "all")) throw new Error("البحث في الهاتف والهوية والتفاصيل يحتاج اتصالاً بالخادم.");
       const session = readStoredSession();
       let rows = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session));
       Object.entries(filters || {}).forEach(([key, value]) => { if (value !== "" && value != null) rows = rows.filter(row => String(row[key]) === String(value)); });
@@ -997,13 +1205,15 @@ export const dataService = {
       return { data: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, source: "cache", cachedAt: readLiveCache()[table]?.savedAt || null };
     }
     let query = supabase.from(viewMap[table] || table).select("*", { count: "exact" });
+    if (table === "beneficiaries") query = scopeBeneficiaryQuery(query);
     Object.entries(filters || {}).forEach(([key, value]) => {
       if (value !== "" && value !== undefined && value !== null) query = query.eq(key, value);
     });
     if (dateKey && dateFrom) query = query.gte(dateKey, dateFrom);
     if (dateKey && dateTo) query = query.lte(dateKey, dateKey.endsWith("_at") ? `${dateTo}T23:59:59.999` : dateTo);
     if (search) query = query.or(`search_text.ilike.%${search.replaceAll(",", " ")}%`);
-    if (orderBy) query = query.order(orderBy, { ascending, nullsFirst: false });
+    query = query.order(orderBy || "id", { ascending, nullsFirst: false });
+    if (orderBy && orderBy !== "id") query = query.order("id", { ascending: true });
     const from = (page - 1) * pageSize;
     query = query.range(from, from + pageSize - 1);
     if (options.signal) query = query.abortSignal(options.signal);
@@ -1013,6 +1223,7 @@ export const dataService = {
       cacheRows(table, data || []);
       return { data: data || [], total: count || 0, source: "network" };
     } catch (error) {
+      if (options.signal?.aborted || table === "beneficiaries") throw error;
       const session = readStoredSession();
       const rows = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session));
       if (rows.length || !isOnline()) {
@@ -1027,12 +1238,14 @@ export const dataService = {
   },
 
   async get(table, id) {
+    const beneficiaryToken = await beginBeneficiaryOperation(table);
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       const row = findById(db, table, id);
       return row ? enrichDemoRow(db, table, row) : null;
     }
     if (!supabase || !isOnline()) {
+      if (table === "beneficiaries") return (await this.searchBeneficiaries("", { filters: { id }, pageSize: 1 })).data[0] || null;
       const session = readStoredSession();
       const row = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session)).find(item => String(item.id) === String(id));
       return row || null;
@@ -1051,10 +1264,12 @@ export const dataService = {
       } else data.details = details || [];
     }
     cacheRows(table, [data]);
+    if (table === "beneficiaries") await beneficiarySaved(table, data, null, beneficiaryToken);
     return data;
   },
 
   async create(table, payload) {
+    const beneficiaryToken = await beginBeneficiaryOperation(table);
     const data = { ...payload };
     delete data.password;
     const postableTables = ["cash_receipts", "cash_payments", "cash_transfers", "currency_exchanges", "campaign_funding", "campaign_in_kind_funding", "in_kind_receipts", "in_kind_payments"];
@@ -1103,6 +1318,7 @@ export const dataService = {
       db[table].unshift(row);
       auditDemo(db, `إضافة ${table}`, table, row.id, null, row);
       writeDemoDb(db);
+      await beneficiarySaved(table, row, null, beneficiaryToken);
       return enrichDemoRow(db, table, row);
     }
 
@@ -1139,6 +1355,7 @@ export const dataService = {
         }
       }
       if (shouldAutoPost) return await this.action(table, inserted.id, "post");
+      await beneficiarySaved(table, inserted, null, beneficiaryToken);
       return inserted;
     } catch (error) {
       if (!isOnline() || /fetch|network/i.test(error.message || "")) {
@@ -1151,6 +1368,7 @@ export const dataService = {
   },
 
   async update(table, id, payload) {
+    const beneficiaryToken = await beginBeneficiaryOperation(table);
     const data = { ...payload };
     delete data.password;
     if (table === "profiles" && Object.hasOwn(data, "first_device_auto_approve")) {
@@ -1171,6 +1389,7 @@ export const dataService = {
       Object.assign(row, data, { updated_at: new Date().toISOString() });
       auditDemo(db, `تعديل ${table}`, table, id, old, row);
       writeDemoDb(db);
+      await beneficiarySaved(table, row, null, beneficiaryToken);
       return enrichDemoRow(db, table, row);
     }
 
@@ -1209,6 +1428,7 @@ export const dataService = {
           if (insertError) throw insertError;
         }
       }
+      await beneficiarySaved(table, updated, null, beneficiaryToken);
       return updated;
     } catch (error) {
       if (!isOnline() || /fetch|network/i.test(error.message || "")) {
@@ -1220,7 +1440,26 @@ export const dataService = {
     }
   },
 
+  async remove(table, id) {
+    const beneficiaryToken = await beginBeneficiaryOperation(table);
+    if (table !== "beneficiaries") throw new Error("الحذف من هذا المسار مخصص لدليل المستفيدين.");
+    if (!isSupabaseConfigured) {
+      const db = ensureDemoDb();
+      if (readStoredSession()?.profile?.role !== "admin") throw new Error("حذف المستفيد متاح للمدير فقط.");
+      if (["cash_payments", "in_kind_payments", "distribution_assignments"].some(name => (db[name] || []).some(row => row.beneficiary_id === id))) throw new Error("لا يمكن حذف مستفيد مرتبط بعمليات.");
+      const record = findById(db, table, id); if (!record) throw new Error("السجل غير موجود.");
+      db[table] = db[table].filter(row => row.id !== id); auditDemo(db, "حذف مستفيد", table, id, record, null); writeDemoDb(db);
+    } else {
+      if (!supabase || !isOnline()) throw new Error("حذف المستفيد يحتاج اتصالاً بالخادم.");
+      const { data, error } = await supabase.from(table).delete().eq("id", id).select("id").maybeSingle();
+      if (error) throw error;
+      if (!data) throw new Error("السجل غير موجود أو ليس لديك صلاحية حذفه.");
+    }
+    await beneficiarySaved(table, null, id, beneficiaryToken);
+  },
+
   async action(table, id, action, extra = {}) {
+    const beneficiaryToken = await beginBeneficiaryOperation(table);
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       const record = findById(db, table, id);
@@ -1269,6 +1508,7 @@ export const dataService = {
       record.updated_at = new Date().toISOString();
       auditDemo(db, `${action} ${table}`, table, id, old, record);
       writeDemoDb(db);
+      await beneficiarySaved(table, result, null, beneficiaryToken);
       return enrichDemoRow(db, table, result);
     }
 
@@ -1333,6 +1573,7 @@ export const dataService = {
     if (action === "toggle" && table === "beneficiaries") updateQuery = updateQuery.eq("status", extra.current);
     const { data, error } = await updateQuery.select().single();
     if (error) throw error;
+    await beneficiarySaved(table, data, null, beneficiaryToken);
     return data;
   },
 
@@ -1365,6 +1606,8 @@ export const dataService = {
       const selected = assignments.sort((a,b) => String(b.assignment.assigned_at || "").localeCompare(String(a.assignment.assigned_at || "")))[0];
       return { beneficiary_id: beneficiary.id, delegate_id: delegate.id, delegate_name: delegate.full_name, campaign_id: selected.campaign.id, campaign_name: selected.campaign.name, cashbox_id: selected.cashbox.id, cashbox_name: selected.cashbox.name, currency: selected.cashbox.currency, available_amount: selected.available, assignment_id: selected.assignment.id };
     }
+    if (!supabase || !isOnline()) throw new Error("التحقق والتسليم يحتاجان اتصالاً بالإنترنت.");
+    await this.verifyBeneficiaryForDelivery(beneficiaryId);
     const { data, error } = await supabase.rpc("get_cash_payment_context", {
       p_beneficiary_id: beneficiaryId,
       p_campaign_id: campaignId || null,
@@ -1378,6 +1621,14 @@ export const dataService = {
 
   async getQuickDeliveryContext(beneficiaryId, requestedDelegateId = null) {
     return this.getPaymentContext(beneficiaryId, null, requestedDelegateId);
+  },
+
+  async verifyBeneficiaryForDelivery(id) {
+    if (!supabase || !isOnline()) throw new Error("التحقق والتسليم يحتاجان اتصالاً بالإنترنت.");
+    const { data, error } = await scopeBeneficiaryQuery(supabase.from("beneficiaries").select(BENEFICIARY_INDEX_FIELDS).eq("id", id).eq("status", "approved")).maybeSingle();
+    if (error) throw error;
+    if (!data || data.status !== "approved") throw new Error("المستفيد غير موجود أو غير معتمد أو خارج صلاحياتك. حدّث البحث وأعد اختياره.");
+    return data;
   },
 
   async quickDelivery(payload) {
@@ -1400,6 +1651,9 @@ export const dataService = {
       writeDemoDb(db);
       return row;
     }
+    const context = await this.getPaymentContext(payload.beneficiary_id, payload.campaign_id || null, payload.delegate_id || null);
+    if (context.campaign_id !== payload.campaign_id || context.cashbox_id !== payload.cashbox_id) throw new Error("تغيّر تخصيص المستفيد؛ أعد اختياره.");
+    if (Number(payload.amount) > Number(context.available_amount)) throw new Error("المبلغ يتجاوز الرصيد المتاح حالياً.");
     const { data, error } = await supabase.rpc("quick_deliver_cash", {
       p_beneficiary_id: payload.beneficiary_id,
       p_amount: Number(payload.amount),
@@ -1736,6 +1990,7 @@ export const dataService = {
       throw new Error(message);
     }
     if (data?.error) throw new Error(`${data.error}${data.request_id ? ` (مرجع الطلب: ${data.request_id})` : ""}`);
+    if (action === "confirm_action") await this.refreshBeneficiaries().catch(() => null);
     return data;
   },
 
@@ -1842,7 +2097,9 @@ export const dataService = {
 
   async syncQueue() {
     if (!isSupabaseConfigured) return { synced: 0, failed: 0 };
-    return syncOfflineQueue(executeQueuedOperation);
+    const result = await syncOfflineQueue(executeQueuedOperation);
+    if (result.synced) await this.refreshBeneficiaries();
+    return result;
   },
 
   async resetDemo() {

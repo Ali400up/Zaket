@@ -28,3 +28,15 @@ export function shouldUseSearchableSelect(optionCount, threshold = 8) {
   return count > limit;
 }
 
+export function createLatestRequest() {
+  let revision = 0, controller = null;
+  return {
+    cancel() { revision += 1; controller?.abort(); controller = null; },
+    begin() {
+      this.cancel(); const current = revision;
+      controller = new AbortController(); const requestController = controller;
+      return { signal: requestController.signal, isCurrent: () => current === revision && !requestController.signal.aborted };
+    }
+  };
+}
+

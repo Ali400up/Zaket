@@ -16,7 +16,7 @@ import { getDeviceName } from "./device-identity.js";
 import { buildNotifications, notificationCount, renderNotificationList } from "./notification-center.js";
 import { formatPrivateValue } from "./screen-values.js";
 import { convertCurrency, deriveExchangeRate, buildCashFlowSummary } from "./currency-service.js";
-import { filterSearchOptions, shouldUseSearchableSelect } from "./searchable-select.js";
+import { filterSearchOptions, shouldUseSearchableSelect, createLatestRequest } from "./searchable-select.js";
 import { healthMetric, describeHealthError } from "./system-health.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
@@ -24,6 +24,7 @@ import {
 } from "./ui.js";
 
 const config = window.ZAKAT_CONFIG || {};
+const tableRequests = createLatestRequest();
 
 const routeMap = {
   dashboard: null,
@@ -210,6 +211,7 @@ function destroyCharts() {
 }
 
 function showLogin() {
+  tableRequests.cancel();
   destroyCharts();
   state.notifications = [];
   state.notificationsLoaded = false;
@@ -220,6 +222,7 @@ function showLogin() {
 }
 
 function showApp() {
+  dataService.beneficiaryOptions().catch(() => null);
   els.loginView.classList.add("hidden");
   els.appShell.classList.remove("hidden");
   const profile = state.session.profile || {};
@@ -256,6 +259,7 @@ function buildNavigation() {
 }
 
 async function navigate(screenId, updateHash = true) {
+  tableRequests.cancel();
   if (!routeMap.hasOwnProperty(screenId)) screenId = "dashboard";
   if (!canAccess(screenId)) {
     toast("لا تملك صلاحية فتح هذه الشاشة.", "error");
@@ -306,14 +310,16 @@ function dashboardMetric(iconClass, color, label, value, foot, screen) {
 }
 
 async function renderDashboard() {
-  const [beneficiaries, campaigns, receipts, payments, items, pendingCash, pendingInKind] = await Promise.all([
-    dataService.list("beneficiaries", { pageSize: 1000 }),
+  const [beneficiaries, campaigns, receipts, payments, items, pendingCash, pendingInKind, approvedBeneficiaries, totalBeneficiaries] = await Promise.all([
+    dataService.list("beneficiaries", { pageSize: 1000, networkOnly: true }),
     dataService.list("campaigns", { pageSize: 1000 }),
     dataService.list("cash_receipts", { pageSize: 1000 }),
     dataService.list("cash_payments", { pageSize: 1000 }),
     dataService.list("items", { pageSize: 1000 }),
     dataService.list("cash_payments", { filters: { status: "under_review" }, pageSize: 20 }),
-    dataService.list("in_kind_payments", { filters: { status: "under_review" }, pageSize: 20 })
+    dataService.list("in_kind_payments", { filters: { status: "under_review" }, pageSize: 20 }),
+    dataService.count("beneficiaries", { filters: { status: "approved" } }),
+    dataService.count("beneficiaries")
   ]);
 
   const displayCurrency = state.dashboardCurrency;
@@ -323,7 +329,7 @@ async function renderDashboard() {
   const currencyNames = typeof Intl.DisplayNames === "function" ? new Intl.DisplayNames(["ar"], { type: "currency" }) : null;
   const currencyOptions = currencyCodes.map(code => `<option value="${escapeHtml(code)}" ${code === displayCurrency ? "selected" : ""}>${escapeHtml(currencyNames?.of(code) || code)}</option>`).join("");
   const stockTotal = items.data.reduce((a, x) => a + Number(x.available_qty || 0), 0);
-  const activeBeneficiaries = beneficiaries.data.filter(x => x.status === "approved").length;
+  const activeBeneficiaries = approvedBeneficiaries.total;
   const openCampaigns = campaigns.data.filter(x => x.status === "open").length;
   const profile = state.session.profile || {};
   const firstName = profile.full_name?.split(" ")[0] || "بك";
@@ -336,7 +342,12 @@ async function renderDashboard() {
     .sort((a, b) => String(b.created_at || b.receipt_date || b.payment_date).localeCompare(String(a.created_at || a.receipt_date || a.payment_date))).slice(0, 6);
 
   const lowStock = items.data.filter(x => Number(x.available_qty || 0) <= Number(x.min_stock || 0));
-  const duplicateCandidates = beneficiaries.data.filter((row, idx, arr) => row.phone && arr.findIndex(x => x.phone === row.phone) !== idx);
+  const seenPhones = new Set();
+  const duplicateCandidates = beneficiaries.data.filter(row => {
+    if (!row.phone) return false;
+    if (seenPhones.has(row.phone)) return true;
+    seenPhones.add(row.phone); return false;
+  });
   const pendingCount = pendingCash.total + pendingInKind.total;
 
   els.pageContent.innerHTML = `
@@ -345,7 +356,7 @@ async function renderDashboard() {
       <div class="welcome-actions">${canQuickDeliver ? `<button class="white-action primary" data-quick-delivery><i class="fa-solid fa-bolt"></i> تسليم سريع لمستفيد</button>` : ""}${canAddBeneficiary ? `<button class="white-action" data-quick-add="beneficiaries"><i class="fa-solid fa-user-plus"></i> مستفيد جديد</button>` : ""}</div>
     </section>
     <section class="metrics-grid">
-      ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", formatNumber(activeBeneficiaries), `${beneficiaries.total} ملف مسجل`, "beneficiaries")}
+      ${dashboardMetric("fa-solid fa-people-roof", "blue", "المستفيدون المعتمدون", formatNumber(activeBeneficiaries), `${totalBeneficiaries.total} ملف مسجل${approvedBeneficiaries.source === "cache" ? " • آخر بيانات محفوظة" : ""}`, "beneficiaries")}
       ${dashboardMetric("fa-solid fa-bullseye", "purple", "الحملات المفتوحة", formatNumber(openCampaigns), `${campaigns.total} حملة إجمالاً`, "campaigns")}
       ${dashboardMetric("fa-solid fa-arrow-trend-down", "green", "المقبوض بالعملة المختارة", formatCurrency(finance.receivedTotal, displayCurrency), "من السندات المرحلة المحمّلة", "cash-receipts")}
       ${dashboardMetric("fa-solid fa-arrow-trend-up", "amber", "المصروف بالعملة المختارة", formatCurrency(finance.spentTotal, displayCurrency), "من السندات المرحلة المحمّلة", "cash-payments")}
@@ -407,7 +418,7 @@ function renderToolbar(cfg, prependToolbar = "") {
   const canImport = cfg.importable && canAdd;
   return `<section class="page-toolbar"><div><div class="page-description">${escapeHtml(cfg.description || "")}</div>${prependToolbar ? `<div style="margin-top:12px">${prependToolbar}</div>` : ""}</div><div class="toolbar-actions">
     ${canImport ? `<button class="ghost-button" data-download-import-template="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-arrow-down"></i> نموذج Excel</button><button class="ghost-button" data-open-import="${escapeHtml(cfg.table)}"><i class="fa-solid fa-file-import"></i> استيراد</button>` : ""}
-    <button class="ghost-button" data-export-current><i class="fa-solid fa-file-export"></i> تصدير</button>
+    <button class="ghost-button" data-export-current><i class="fa-solid fa-file-excel"></i> تصدير Excel</button>
     <button class="ghost-button" data-print-current><i class="fa-solid fa-print"></i> طباعة</button>
     ${cfg.primaryLabel && canAdd ? `<button class="primary-button" data-add-record><i class="fa-solid fa-plus"></i> ${escapeHtml(cfg.primaryLabel)}</button>` : ""}
   </div></section>`;
@@ -419,7 +430,8 @@ function genericFilters(cfg) {
   const statusOptions = statusColumn?.type === "boolean-status"
     ? [["true", "نشط"], ["false", "موقوف"]]
     : ["active", "inactive", "draft", "under_review", "approved", "posted", "cancelled", "open", "closed", "completed", "reopened"].map(value => [value, statusLabels[value] || value]);
-  return `<section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="table-search" value="${escapeHtml(state.table.search)}" placeholder="ابحث في ${escapeHtml(cfg.title)}..." /></div>
+  return `<section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="table-search" value="${escapeHtml(state.table.search)}" placeholder="${cfg.table === "beneficiaries" && state.table.searchMode !== "all" ? "ابحث بالاسم أو رقم الملف..." : `ابحث في ${escapeHtml(cfg.title)}...`}" /></div>
+    ${cfg.table === "beneficiaries" ? `<div class="filter-control"><select id="beneficiary-search-mode" aria-label="نطاق البحث"><option value="name" ${state.table.searchMode !== "all" ? "selected" : ""}>الاسم / رقم الملف — سريع</option><option value="all" ${state.table.searchMode === "all" ? "selected" : ""}>بحث شامل — الهاتف والهوية وبقية الحقول</option></select></div>` : ""}
     ${statusColumn ? `<div class="filter-control"><select id="status-filter" data-filter-key="${statusKey}"><option value="">كل الحالات</option>${statusOptions.map(([value, label]) => `<option value="${value}" ${String(state.table.filters[statusKey] ?? "") === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></div>` : `<div class="filter-control"><select disabled><option>كل الحالات</option></select></div>`}
     <div class="filter-control"><input id="date-from-filter" type="date" title="من تاريخ" value="${escapeHtml(state.table.dateFrom || "")}" /></div>
     <div class="filter-control"><input id="date-to-filter" type="date" title="إلى تاريخ" value="${escapeHtml(state.table.dateTo || "")}" /></div>
@@ -428,14 +440,21 @@ function genericFilters(cfg) {
 
 async function renderDataScreen(cfg, options = {}) {
   if (!cfg) throw new Error("تعذر العثور على إعدادات الشاشة.");
+  const request = tableRequests.begin();
+  const screen = state.currentScreen, account = state.session?.profile?.id;
+  const tableOptions = { ...state.table, filters: { ...state.table.filters }, dateKey: cfg.dateKey, signal: request.signal };
   state.currentConfig = cfg;
-  const result = await dataService.list(cfg.table, { ...state.table, dateKey: cfg.dateKey });
+  let result;
+  try { result = await dataService.list(cfg.table, tableOptions); }
+  catch (error) { if (!request.isCurrent() || error?.name === "AbortError") return false; throw error; }
+  if (!request.isCurrent() || screen !== state.currentScreen || account !== state.session?.profile?.id) return false;
   state.currentRows = result.data;
   state.currentPrint = { title: cfg.title, columns: cfg.columns };
   const totalPages = Math.max(1, Math.ceil(result.total / state.table.pageSize));
+  if (result.page) state.table.page = result.page;
   if (state.table.page > totalPages) state.table.page = totalPages;
 
-  els.pageContent.innerHTML = `${renderToolbar(cfg, options.prependToolbar || "")}${genericFilters(cfg)}
+  els.pageContent.innerHTML = `${renderToolbar(cfg, options.prependToolbar || "")}${genericFilters(cfg)}${result.source === "cache" && cfg.table === "beneficiaries" ? '<div class="info-callout">آخر أسماء محفوظة دون اتصال. اتصل بالخادم لعرض التفاصيل والتحقق قبل التسليم.</div>' : ""}
     <section class="table-card"><header class="table-card-header"><div class="table-title-block"><span class="table-title-icon" aria-hidden="true">${renderMenuIcon(getScreenMeta(state.currentScreen).icon)}</span><div><h3>${escapeHtml(cfg.title)}</h3><p>${formatNumber(result.total)} سجل • الصفحة ${state.table.page} من ${totalPages}</p></div></div><span class="table-view-label"><i class="fa-solid fa-table-list" aria-hidden="true"></i> السجلات</span></header>
     ${renderTable(cfg, result.data)}
     <footer class="table-footer"><span>عرض ${result.data.length ? (state.table.page - 1) * state.table.pageSize + 1 : 0} - ${Math.min(state.table.page * state.table.pageSize, result.total)} من ${result.total}</span><div class="pagination">
@@ -443,6 +462,7 @@ async function renderDataScreen(cfg, options = {}) {
       ${paginationButtons(state.table.page, totalPages)}
       <button class="page-button" data-page="${Math.min(totalPages, state.table.page + 1)}" ${state.table.page === totalPages ? "disabled" : ""}><i class="fa-solid fa-chevron-left"></i></button>
     </div></footer></section>`;
+  return true;
 }
 
 function paginationButtons(current, total) {
@@ -532,7 +552,9 @@ function renderRowActions(cfg, row) {
 
 async function loadRelationOptions(field) {
   if (!["relation", "autocompleteRelation"].includes(field.type)) return [];
-  const result = await dataService.list(field.relation.table, { pageSize: 1000, filters: field.relation.filter || {} });
+  const result = field.relation.table === "beneficiaries"
+    ? { data: await dataService.beneficiaryOptions(field.relation.filter || {}) }
+    : await dataService.list(field.relation.table, { pageSize: 1000, filters: field.relation.filter || {} });
   return result.data.map(row => {
     const base = row[field.relation.label] || row.name || row.full_name || row.voucher_no || row.id;
     const label = field.relation.table === "cashboxes" ? `${base} — ${formatCurrency(row.current_balance, row.currency)} (${row.currency || config.currency})` : base;
@@ -617,6 +639,11 @@ function isEmptyValue(value) {
   return value === undefined || value === null || value === "" || (Array.isArray(value) && !value.length);
 }
 
+function renderSmartOptions(key, options = [], selected = "") {
+  const icon = ["beneficiary_id", "delegate_id", "profile_id", "user_id"].includes(key) ? "fa-user" : "fa-folder-open";
+  return options.map((opt, index) => `<button id="field-${key}-option-${index}" type="button" role="option" tabindex="-1" aria-selected="${String(opt.value) === String(selected)}" class="smart-select-option" data-smart-option data-relation-value="${escapeHtml(opt.value)}" data-relation-label="${escapeHtml(opt.label)}" data-delegate-id="${escapeHtml(opt.row?.delegate_id || "")}" data-name="${escapeHtml(opt.row?.full_name || opt.row?.name || "")}" data-phone="${escapeHtml(opt.row?.phone || "")}" data-currency="${escapeHtml(opt.row?.currency || "")}" data-file-no="${escapeHtml(opt.row?.file_no || "")}"><span class="smart-select-option-icon" aria-hidden="true"><i class="fa-solid ${icon}"></i></span><span class="smart-select-option-copy"><strong>${escapeHtml(opt.label)}</strong>${opt.row?.file_no ? `<small>رقم الملف: <bdi>${escapeHtml(opt.row.file_no)}</bdi></small>` : ""}</span><i class="fa-solid fa-check smart-select-option-check" aria-hidden="true"></i></button>`).join("");
+}
+
 function renderFormField(field, value, relationOptions = [], itemOptions = []) {
   const full = field.full || ["textarea", "lineItems"].includes(field.type) ? "full" : "";
   let label = `<label for="field-${field.key}">${escapeHtml(field.label)}${field.required || field.requiredOnCreate ? `<span class="required">*</span>` : ""}</label>`;
@@ -635,12 +662,11 @@ function renderFormField(field, value, relationOptions = [], itemOptions = []) {
     && (field.type === "autocompleteRelation" || shouldUseSearchableSelect(relationOptions.length, field.searchThreshold ?? 8));
   if (smartRelation) {
     const selected = relationOptions.find(option => String(option.value) === String(value ?? ""));
-    const optionIcon = ["beneficiary_id", "delegate_id", "profile_id", "user_id"].includes(field.key) ? "fa-user" : "fa-folder-open";
     label = label.replace(`for="field-${field.key}"`, `for="field-${field.key}-search"`);
     control = `<div class="smart-select" data-smart-select="${field.key}" data-relation-autocomplete="${field.key}">
       <div class="smart-select-input"><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><input id="field-${field.key}-search" class="form-control" type="search" role="combobox" aria-autocomplete="list" aria-haspopup="listbox" aria-controls="field-${field.key}-options" aria-expanded="false" autocomplete="off" spellcheck="false" placeholder="${escapeHtml(field.placeholder || "ابحث ثم اختر من القائمة")}" value="${escapeHtml(selected?.label || "")}" ${field.required ? "required" : ""} ${locked ? "disabled" : ""}><button type="button" class="smart-select-clear ${selected ? "" : "hidden"}" data-smart-clear aria-label="مسح الاختيار" ${locked ? "disabled" : ""}><i class="fa-solid fa-xmark" aria-hidden="true"></i></button><i class="fa-solid fa-chevron-down smart-select-chevron" aria-hidden="true"></i></div>
       <input id="field-${field.key}" name="${field.key}" type="hidden" value="${escapeHtml(value || "")}">
-      <div id="field-${field.key}-options" class="smart-select-menu hidden" role="listbox" aria-label="${escapeHtml(field.label)}" data-relation-suggestions>${relationOptions.map((opt, index) => `<button id="field-${field.key}-option-${index}" type="button" role="option" tabindex="-1" class="smart-select-option" data-smart-option data-relation-value="${escapeHtml(opt.value)}" data-relation-label="${escapeHtml(opt.label)}" data-delegate-id="${escapeHtml(opt.row?.delegate_id || "")}" data-name="${escapeHtml(opt.row?.full_name || opt.row?.name || "")}" data-phone="${escapeHtml(opt.row?.phone || "")}" data-currency="${escapeHtml(opt.row?.currency || "")}" data-file-no="${escapeHtml(opt.row?.file_no || "")}"><span class="smart-select-option-icon" aria-hidden="true"><i class="fa-solid ${optionIcon}"></i></span><span class="smart-select-option-copy"><strong>${escapeHtml(opt.label)}</strong>${opt.row?.file_no ? `<small>رقم الملف: <bdi>${escapeHtml(opt.row.file_no)}</bdi></small>` : ""}</span><i class="fa-solid fa-check smart-select-option-check" aria-hidden="true"></i></button>`).join("")}<div class="smart-select-empty hidden" data-smart-empty><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><strong>لا توجد نتائج مطابقة</strong><span>جرّب كتابة جزء من الاسم</span></div></div>
+      <div id="field-${field.key}-options" class="smart-select-menu hidden" role="listbox" aria-label="${escapeHtml(field.label)}" data-relation-suggestions>${renderSmartOptions(field.key, relationOptions.slice(0, 20), value)}<div class="smart-select-empty hidden" data-smart-empty><i class="fa-solid fa-magnifying-glass" aria-hidden="true"></i><strong>لا توجد نتائج مطابقة</strong><span>جرّب كتابة جزء من الاسم</span></div></div>
     </div>`;
   } else if (field.type === "select" || field.type === "relation") {
     const options = field.type === "relation" ? relationOptions : (field.options || []);
@@ -730,9 +756,9 @@ function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], ed
     const search = wrapper.querySelector('input[type="search"]');
     const hidden = wrapper.querySelector('input[type="hidden"]');
     const suggestions = wrapper.querySelector("[data-relation-suggestions]");
-    const optionNodes = [...suggestions.querySelectorAll("[data-smart-option]")];
+    let optionNodes = [...suggestions.querySelectorAll("[data-smart-option]")];
+    const source = relationMap.get(wrapper.dataset.smartSelect) || optionNodes.map(node => ({ value: node.dataset.relationValue, label: node.dataset.relationLabel, row: { file_no: node.dataset.fileNo } }));
     const clear = wrapper.querySelector("[data-smart-clear]");
-    const empty = wrapper.querySelector("[data-smart-empty]");
     let activeIndex = -1;
     const closeOptions = () => {
       suggestions.classList.add("hidden");
@@ -740,24 +766,20 @@ function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], ed
       search.removeAttribute("aria-activedescendant");
       activeIndex = -1;
     };
-    const showMatches = (clearSelection = true) => {
+    const showMatches = (clearSelection = true, page = 1) => {
       if (search.disabled) return;
       if (clearSelection && search.value !== hidden.dataset.selectedLabel) {
         hidden.value = "";
         clear?.classList.add("hidden");
       }
-      const source = optionNodes.map(node => ({ value: node.dataset.relationValue, label: node.dataset.relationLabel, row: { file_no: node.dataset.fileNo } }));
       const query = !clearSelection && search.value === hidden.dataset.selectedLabel ? "" : search.value;
-      const matches = new Set(filterSearchOptions(source, query, ["file_no"]).map(option => String(option.value)));
-      let visible = 0;
-      optionNodes.forEach(option => {
-        const match = matches.has(String(option.dataset.relationValue));
-        option.classList.toggle("hidden", !match || visible >= 20);
-        option.classList.remove("active");
-        option.setAttribute("aria-selected", String(option.dataset.relationValue === hidden.value));
-        if (match && visible < 20) visible += 1;
-      });
-      empty?.classList.toggle("hidden", visible > 0);
+      const matches = filterSearchOptions(source, query, ["file_no"]);
+      const pages = Math.max(1, Math.ceil(matches.length / 20));
+      page = Math.max(1, Math.min(page, pages));
+      suggestions.innerHTML = renderSmartOptions(wrapper.dataset.smartSelect, matches.slice((page - 1) * 20, page * 20), hidden.value)
+        + (!matches.length ? '<div class="smart-select-empty" data-smart-empty><strong>لا توجد نتائج مطابقة</strong></div>' : "")
+        + (pages > 1 ? `<div class="search-result-pagination"><button type="button" class="page-button" data-smart-page="${page - 1}" ${page === 1 ? "disabled" : ""}>السابق</button><span>${page} / ${pages} • ${matches.length} نتيجة</span><button type="button" class="page-button" data-smart-page="${page + 1}" ${page === pages ? "disabled" : ""}>التالي</button></div>` : "");
+      optionNodes = [...suggestions.querySelectorAll("[data-smart-option]")];
       suggestions.classList.remove("hidden");
       search.setAttribute("aria-expanded", "true");
       search.removeAttribute("aria-activedescendant");
@@ -786,6 +808,8 @@ function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], ed
       visible[activeIndex]?.scrollIntoView({ block: "nearest" });
     });
     suggestions.addEventListener("click", event => {
+      const pagination = event.target.closest("[data-smart-page]");
+      if (pagination) { showMatches(false, Number(pagination.dataset.smartPage)); return; }
       const option = event.target.closest("[data-relation-value]");
       if (!option) return;
       hidden.value = option.dataset.relationValue;
@@ -1108,7 +1132,7 @@ async function handleRowAction(action, id) {
       if (!ok) return;
       await dataService.action(cfg.table, id, "settle", { reason: "تسوية كاملة من واجهة النظام" });
     } else if (action === "export") {
-      return exportRows([record], `${cfg.table}-${id}.csv`);
+      return exportRows([record], `${cfg.table}-${id}.xlsx`);
     } else if (action === "reopen") {
       const label = cfg.table === "campaign_distributors" ? "تخصيص الموزع" : "الحساب";
       const ok = await confirmDialog(`إعادة فتح ${label} تعيد فقط المرتجع الناتج تلقائياً عن آخر تسوية، وستسجل العملية في التدقيق.`, `إعادة فتح ${label}`, "إعادة فتح", true);
@@ -1311,7 +1335,7 @@ async function renderReports() {
   const data = await dataService.list(reportTable, { pageSize: 200 });
   state.currentRows = data.data;
   state.currentPrint = { title: active.title, columns: cfg?.columns || [] };
-  els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">اختر التقرير ثم استخدم الفلاتر والطباعة أو التصدير.</div><div class="toolbar-actions"><button class="ghost-button" data-export-report><i class="fa-solid fa-file-excel"></i> تصدير Excel/CSV</button><button class="primary-button" data-print-current><i class="fa-solid fa-print"></i> طباعة التقرير</button></div></section>
+  els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">اختر التقرير ثم استخدم الفلاتر والطباعة أو التصدير.</div><div class="toolbar-actions"><button class="ghost-button" data-export-report><i class="fa-solid fa-file-excel"></i> تصدير Excel</button><button class="primary-button" data-print-current><i class="fa-solid fa-print"></i> طباعة التقرير</button></div></section>
     <section class="report-selector">${reportDefinitions.map(r => `<button class="report-card ${r.id === state.reportId ? "active" : ""}" data-report="${r.id}"><i class="${r.icon}"></i><strong>${escapeHtml(r.title)}</strong><span>${escapeHtml(r.description)}</span></button>`).join("")}</section>
     <section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="report-search" placeholder="بحث داخل التقرير..."></div><div class="filter-control"><input type="date" id="report-from"></div><div class="filter-control"><input type="date" id="report-to"></div><div class="filter-control"><select id="report-status"><option value="">كل الحالات</option><option value="posted">مرحّل</option><option value="under_review">تحت المراجعة</option><option value="cancelled">ملغي</option></select></div><button class="secondary-button" id="apply-report-filter"><i class="fa-solid fa-filter"></i> تطبيق</button></section>
     <section class="table-card"><header class="table-card-header"><div><h3>${escapeHtml(active.title)}</h3><p>${formatNumber(data.total)} نتيجة</p></div><span class="status-badge active">تقرير حي</span></header><div id="report-table-wrap">${cfg ? renderTable({ ...cfg, actions: [] }, data.data) : renderSimpleRows(data.data, Object.keys(data.data[0] || {}).slice(0, 7))}</div></section>`;
@@ -1736,12 +1760,30 @@ async function saveSettings() {
   toast("تم حفظ الإعدادات.");
 }
 
-function exportRows(rows, filename = "report.csv") {
+function exportRows(rows, filename = "report.xlsx") {
   if (!rows.length) return toast("لا توجد بيانات للتصدير.", "warning");
-  const keys = Object.keys(rows[0]).filter(k => !["old_data", "new_data", "session_info", "details"].includes(k));
-  const csv = "\uFEFF" + [keys.join(","), ...rows.map(row => keys.map(k => `"${String(row[k] ?? "").replaceAll('"', '""')}"`).join(","))].join("\n");
-  downloadText(filename, csv, "text/csv;charset=utf-8");
-  toast("تم تجهيز ملف التصدير.");
+  try {
+    const XLSX = window.XLSX;
+    if (!XLSX?.utils || typeof XLSX.write !== "function") throw new Error("مكتبة Excel غير متاحة. أعد تحميل الصفحة ثم حاول مجدداً.");
+    const keys = [...new Set(rows.flatMap(row => Object.keys(row)))].filter(k => !["old_data", "new_data", "session_info", "details"].includes(k));
+    const values = rows.map(row => keys.map(key => {
+      const value = row[key];
+      if (value == null) return "";
+      return typeof value === "object" ? JSON.stringify(value) : value;
+    }));
+    const sheet = XLSX.utils.aoa_to_sheet([keys, ...values]);
+    sheet["!cols"] = keys.map(key => ({ wch: Math.max(14, key.length + 4) }));
+    sheet["!autofilter"] = { ref: sheet["!ref"] };
+    const workbook = XLSX.utils.book_new();
+    workbook.Workbook = { Views: [{ RTL: true }] };
+    XLSX.utils.book_append_sheet(workbook, sheet, "البيانات");
+    const content = XLSX.write(workbook, { bookType: "xlsx", type: "array", compression: true });
+    const excelFilename = String(filename).replace(/\.(csv|ccv|xls|xlsx)$/i, "") + ".xlsx";
+    downloadText(excelFilename, content, "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+    toast("تم تجهيز ملف Excel بصيغة XLSX.");
+  } catch (error) {
+    toast(error.message || "تعذر تجهيز ملف Excel. حاول مجدداً.", "error");
+  }
 }
 
 async function resolveImportRelations(parsed) {
@@ -1822,17 +1864,25 @@ async function openQuickDelivery() {
   if (!roleCanWrite("distribution_assignments", "create")) return toast("لا يملك دورك الحالي صلاحية تنفيذ التسليم السريع.", "error");
   const role = state.session?.profile?.role || "";
   const profileId = state.session?.profile?.id || null;
-  const [beneficiaryResult, delegateResult] = await Promise.all([
-    dataService.list("beneficiaries", { pageSize: 1000 }),
-    dataService.list("delegates", { pageSize: 1000 })
-  ]);
+  openModal({ title: "تسليم سريع لمستفيد", body: '<div id="quick-search-loading" class="loading-inner"><span class="spinner"></span><span>جاري تجهيز أسماء المستفيدين...</span></div>', footer: '<button class="ghost-button" data-close-modal>إلغاء</button>' });
+  let delegateResult;
+  try {
+    [, delegateResult] = await Promise.all([
+      dataService.searchBeneficiaries("", { filters: { status: "approved" }, pageSize: 12 }),
+      dataService.list("delegates", { pageSize: 1000 })
+    ]);
+  } catch (error) {
+    const loading = document.getElementById("quick-search-loading");
+    if (loading) loading.innerHTML = `<span>${escapeHtml(error.message || "تعذر تجهيز أسماء المستفيدين. أعد المحاولة.")}</span>`;
+    return;
+  }
 
-  let beneficiaries = (beneficiaryResult.data || []).filter(x => x.status === "approved");
+  if (!document.getElementById("quick-search-loading")) return;
+  let beneficiaries = [];
   const activeDelegates = (delegateResult.data || []).filter(x => x.is_active !== false);
   if (role === "distributor") {
     const linkedDelegate = (delegateResult.data || []).find(d => d.profile_id === profileId || d.id === state.session?.profile?.delegate_id);
-    if (!linkedDelegate) return toast("لا يوجد موزع مرتبط بالحساب الحالي.", "error");
-    beneficiaries = beneficiaries.filter(b => b.delegate_id === linkedDelegate.id);
+    if (!linkedDelegate) { closeModal(); return toast("لا يوجد موزع مرتبط بالحساب الحالي.", "error"); }
   }
 
   openModal({
@@ -1841,7 +1891,7 @@ async function openQuickDelivery() {
     body: `<form id="quick-delivery-form" class="form-grid">
       <div class="form-field full quick-beneficiary-field">
         <label>اسم المستفيد المسجل <span class="required">*</span></label>
-        <input id="quick-beneficiary-name" class="form-control" autocomplete="off" required placeholder="ابدأ بكتابة اسم مسجل في دليل المستفيدين">
+        <input id="quick-beneficiary-name" class="form-control" autocomplete="off" required placeholder="ابحث بالاسم أو رقم الملف">
         <input id="quick-beneficiary-id" type="hidden">
         <div id="quick-beneficiary-suggestions" class="quick-suggestions hidden"></div>
         <span class="help-text">${role === "distributor" ? "تظهر فقط الأسماء المعتمدة والمرتبطة بك." : "يمكن للمدير والمشرف البحث في جميع المستفيدين المعتمدين."}</span>
@@ -1862,8 +1912,10 @@ async function openQuickDelivery() {
   const suggestions = document.getElementById("quick-beneficiary-suggestions");
   const contextBox = document.getElementById("quick-delivery-context");
   let deliveryContext = null;
+  const suggestionRequests = createLatestRequest(), contextRequests = createLatestRequest();
 
   const resetSelection = () => {
+    contextRequests.cancel();
     idInput.value = "";
     amountInput.value = "";
     amountInput.disabled = true;
@@ -1875,25 +1927,38 @@ async function openQuickDelivery() {
     contextBox.innerHTML = "";
   };
 
-  const showSuggestions = () => {
-    const term = nameInput.value.trim().toLowerCase();
+  const showSuggestions = async (page = 1) => {
+    const request = suggestionRequests.begin();
+    const term = nameInput.value;
     resetSelection();
-    const matches = beneficiaries.filter(b => !term || String(b.full_name || "").toLowerCase().includes(term)).slice(0, 12);
+    let result;
+    try { result = await dataService.searchBeneficiaries(term, { filters: { status: "approved" }, page, pageSize: 12, signal: request.signal }); }
+    catch (error) {
+      if (request.isCurrent() && nameInput.isConnected) { suggestions.innerHTML = `<div class="quick-suggestion-empty">${escapeHtml(error.message || "تعذر البحث")}</div>`; suggestions.classList.remove("hidden"); }
+      return;
+    }
+    if (!request.isCurrent() || !nameInput.isConnected || nameInput.value !== term) return;
+    beneficiaries = result.data;
+    const matches = result.data;
     suggestions.innerHTML = matches.length
       ? matches.map(b => `<button type="button" class="quick-suggestion-item" data-beneficiary-id="${escapeHtml(b.id)}" data-beneficiary-name="${escapeHtml(b.full_name)}"><strong>${escapeHtml(b.full_name)}</strong><span>${escapeHtml(b.file_no || b.phone || "")}</span></button>`).join("")
       : `<div class="quick-suggestion-empty">لا يوجد مستفيد مسجل ومعتمد بهذا الاسم</div>`;
+    if (result.totalPages > 1) suggestions.innerHTML += `<div class="search-result-pagination"><button type="button" class="page-button" data-quick-page="${result.page - 1}" ${result.page === 1 ? "disabled" : ""}>السابق</button><span>${result.page} / ${result.totalPages} • ${formatNumber(result.total)} نتيجة</span><button type="button" class="page-button" data-quick-page="${result.page + 1}" ${result.page === result.totalPages ? "disabled" : ""}>التالي</button></div>`;
     suggestions.classList.remove("hidden");
   };
 
-  nameInput.addEventListener("input", showSuggestions);
-  nameInput.addEventListener("focus", showSuggestions);
+  nameInput.addEventListener("input", () => showSuggestions());
+  nameInput.addEventListener("focus", () => showSuggestions());
   const loadDeliveryContext = async (beneficiaryId, requestedDelegateId = null) => {
+    const request = contextRequests.begin();
     contextBox.classList.remove("hidden");
     contextBox.innerHTML = `<div class="loading-inner"><span class="spinner"></span><span>جاري التحقق من التخصيص والرصيد...</span></div>`;
     amountInput.disabled = true;
     confirmButton.disabled = true;
     try {
-      deliveryContext = await dataService.getQuickDeliveryContext(beneficiaryId, requestedDelegateId);
+      const context = await dataService.getQuickDeliveryContext(beneficiaryId, requestedDelegateId);
+      if (!request.isCurrent() || !nameInput.isConnected || idInput.value !== String(beneficiaryId)) return;
+      deliveryContext = context;
       if (delegateSelect) { delegateSelect.value = deliveryContext.delegate_id; delegateSelect.disabled = false; }
       contextBox.innerHTML = `<div><span>الموزع</span><strong>${escapeHtml(deliveryContext.delegate_name)}</strong></div><div><span>الحملة</span><strong>${escapeHtml(deliveryContext.campaign_name)}</strong></div><div><span>الصندوق / العملة</span><strong>${escapeHtml(deliveryContext.cashbox_name)} — ${escapeHtml(deliveryContext.currency)}</strong></div><div><span>المتاح للتسليم</span><strong>${formatCurrency(deliveryContext.available_amount, deliveryContext.currency)}</strong></div>`;
       amountInput.disabled = false;
@@ -1902,14 +1967,18 @@ async function openQuickDelivery() {
       confirmButton.disabled = false;
       amountInput.focus();
     } catch (error) {
+      if (!request.isCurrent() || !nameInput.isConnected) return;
       deliveryContext = null;
       contextBox.innerHTML = `<div class="import-errors">${escapeHtml(error.message || "لا يوجد تخصيص صالح لهذا المستفيد.")}</div>`;
     }
   };
 
   suggestions.addEventListener("click", async e => {
+    const pagination = e.target.closest("[data-quick-page]");
+    if (pagination) return showSuggestions(Number(pagination.dataset.quickPage));
     const item = e.target.closest("[data-beneficiary-id]");
     if (!item) return;
+    suggestionRequests.cancel();
     idInput.value = item.dataset.beneficiaryId;
     nameInput.value = item.dataset.beneficiaryName;
     suggestions.classList.add("hidden");
@@ -2169,10 +2238,13 @@ async function handleGlobalClick(event) {
   if (classTab) { state.classificationTab = classTab.dataset.classTab; state.table = { page: 1, pageSize: config.pageSize || 10, search: "", filters: {}, dateFrom: "", dateTo: "" }; return renderClassifications(); }
   const report = event.target.closest("[data-report]");
   if (report) { state.reportId = report.dataset.report; return renderReports(); }
-  if (event.target.closest("[data-refresh-table]")) return refreshCurrentScreen();
+  if (event.target.closest("[data-refresh-table]")) {
+    if (state.currentConfig?.table === "beneficiaries") await dataService.refreshBeneficiaries();
+    return refreshCurrentScreen();
+  }
   if (event.target.closest("[data-print-current]")) return printCurrentView();
-  if (event.target.closest("[data-export-current]")) return exportRows(state.currentRows, `${state.currentConfig?.table || "data"}.csv`);
-  if (event.target.closest("[data-export-report]")) return exportRows(state.currentRows, `${state.reportId}.csv`);
+  if (event.target.closest("[data-export-current]")) return exportRows(state.currentRows, `${state.currentConfig?.table || "data"}.xlsx`);
+  if (event.target.closest("[data-export-report]")) return exportRows(state.currentRows, `${state.reportId}.xlsx`);
   if (event.target.closest("#apply-report-filter")) return applyReportFilter();
   if (event.target.closest("[data-sync-now]")) {
     const btn = event.target.closest("[data-sync-now]"); btn.disabled = true;
@@ -2214,7 +2286,8 @@ async function handleGlobalClick(event) {
 }
 
 function bindEvents() {
-  document.addEventListener("click", handleGlobalClick);
+  document.addEventListener("click", event => { handleGlobalClick(event).catch(error => toast(error.message || "تعذر تنفيذ الطلب.", "error")); });
+  window.addEventListener("zakat:auth-account-change", () => { state.session = null; closeModal(); closeDrawer(); showLogin(); });
   window.addEventListener("popstate", () => navigate(location.hash.replace("#", "") || "dashboard", false));
   subscribeConnection(({ online }) => {
     const wasOffline = document.body.classList.contains("is-offline");
@@ -2226,6 +2299,13 @@ function bindEvents() {
   });
   window.addEventListener("zakat:queue-change", () => { updateQueueBadge(); scheduleNotificationRefresh(); });
   window.addEventListener("zakat:data-change", scheduleNotificationRefresh);
+  const refreshIndexResults = debounce(() => {
+    if (state.session && state.currentScreen === "beneficiaries" && document.getElementById("table-search")) {
+      renderDataScreen(state.currentConfig).catch(error => toast(error.message || "تعذر تحديث البحث.", "error"));
+    }
+    document.getElementById("quick-beneficiary-name")?.dispatchEvent(new Event("input", { bubbles: true }));
+  }, 150);
+  window.addEventListener("zakat:beneficiary-index-change", refreshIndexResults);
   window.addEventListener("zakat:charts-ready", () => { if (state.currentScreen === "dashboard" && state.session) renderDashboard(); });
   window.addEventListener("zakat:assistant-ui-command", event => {
     const command = event.detail || {};
@@ -2245,17 +2325,26 @@ function bindEvents() {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCommandPalette(); }
     if (e.key === "Escape") { closeModal(); closeDrawer(); closeCommandPalette(); }
   });
-  document.addEventListener("input", debounce(async e => {
-    if (e.target.id === "table-search") {
-      const value = e.target.value;
-      state.table.search = value;
-      state.table.page = 1;
-      await renderDataScreen(state.currentConfig);
+  const searchTable = debounce(async (target, screen) => {
+    if (!target.isConnected || screen !== state.currentScreen) return;
+    const value = state.table.search;
+    try {
+      const rendered = await renderDataScreen(state.currentConfig);
       const input = document.getElementById("table-search");
-      if (input) { input.focus(); input.setSelectionRange(value.length, value.length); }
-    }
-  }, 420));
+      if (rendered && input && state.table.search === value) { input.focus(); input.setSelectionRange(value.length, value.length); }
+    } catch (error) { toast(error.message || "تعذر البحث.", "error"); }
+  }, 150);
+  document.addEventListener("input", e => {
+    if (e.target.id !== "table-search") return;
+    state.table.search = e.target.value; state.table.page = 1;
+    // Invalidate immediately, including the delay before the next request starts.
+    tableRequests.cancel(); searchTable(e.target, state.currentScreen);
+  });
   document.addEventListener("change", async e => {
+    if (e.target.id === "beneficiary-search-mode") {
+      state.table.searchMode = e.target.value; state.table.page = 1;
+      await renderDataScreen(state.currentConfig);
+    }
     if (e.target.id === "status-filter") {
       const key = e.target.dataset.filterKey || "status";
       delete state.table.filters.status;
