@@ -19,59 +19,68 @@
   <noscript>يجب تفعيل JavaScript لتشغيل النظام.</noscript>
 
   <div id="login-view" class="login-page">
-    <section class="login-visual" aria-hidden="true">
-      <div class="visual-inner">
-        <div class="login-brand"><span class="visual-logo"><img src="assets/logo.svg" alt="" /></span><div><strong>نظام الزكاة والتبرعات</strong><span>تنظيم العطاء، من البداية إلى الأثر</span></div></div>
-        <span class="eyebrow"><span class="login-dot"></span> كل تفاصيل العمل، في مكان واحد</span>
-        <h1>إدارة العطاء<br /><span>بوضوح واطمئنان.</span></h1>
-        <p>مساحة مرتبة لمتابعة المستفيدين والتبرعات، وتوثيق كل عملية بخطوات واضحة.</p>
-        <div class="visual-features">
-          <div><i class="fa-solid fa-hand-holding-heart"></i><strong>المستفيدون</strong><span>متابعة ملفات الاستحقاق</span></div>
-          <div><i class="fa-solid fa-boxes-stacked"></i><strong>الحملات والمخزون</strong><span>تنظيم النقدي والعيني</span></div>
-          <div><i class="fa-solid fa-file-invoice"></i><strong>السندات والتقارير</strong><span>توثيق ومتابعة العمليات</span></div>
-        </div>
-      </div>
-    </section>
-
-    <main class="login-panel">
-      <div class="login-card">
-        <div class="mobile-brand">
-          <img src="assets/logo.svg" alt="شعار النظام" />
-          <div><strong>نظام الزكاة</strong><span>والتبرعات</span></div>
-        </div>
-        <div class="login-heading-icon" aria-hidden="true"><i class="fa-solid fa-arrow-right-to-bracket"></i></div>
-        <span class="login-greeting">أهلًا بعودتك</span>
-        <h2>تسجيل الدخول</h2>
-        <p class="muted">سجّل دخولك لمتابعة أعمالك وإدارة النظام.</p>
-
-        <form id="login-form" class="auth-form" autocomplete="on">
-          <label class="field-label" for="login-phone">رقم الهاتف</label>
-          <div class="input-icon">
-            <i class="fa-regular fa-user"></i>
-            <input id="login-phone" name="phone" type="tel" inputmode="tel" placeholder="مثال: 777123456" autocomplete="username" dir="ltr" required />
+    <div class="login-surface">
+      <section class="login-visual" aria-label="نظام إدارة الزكاة والتبرعات">
+        <div class="visual-inner">
+          <div class="login-brand"><span class="visual-logo"><img src="assets/logo.svg" alt="" /></span><div><strong>نظام الزكاة والتبرعات</strong><span>تنظيم العطاء، من البداية إلى الأثر</span></div></div>
+          <div class="visual-message">
+            <span class="eyebrow"><span class="login-dot" aria-hidden="true"></span> كل تفاصيل العمل، في مكان واحد</span>
+            <h2>إدارة العطاء<br /><span>بوضوح واطمئنان.</span></h2>
+            <p>مساحة مرتبة لمتابعة المستفيدين والتبرعات، وتوثيق كل عملية بخطوات واضحة.</p>
           </div>
-
-          <div class="label-row">
-            <label class="field-label" for="login-password">كلمة المرور</label>
-            <button class="text-button" type="button" id="forgot-password">نسيت كلمة المرور؟</button>
+          <div class="visual-features">
+            <div><i class="fa-solid fa-hand-holding-heart" aria-hidden="true"></i><strong>المستفيدون</strong><span>متابعة ملفات الاستحقاق</span></div>
+            <div><i class="fa-solid fa-boxes-stacked" aria-hidden="true"></i><strong>الحملات والمخزون</strong><span>تنظيم النقدي والعيني</span></div>
+            <div><i class="fa-solid fa-file-invoice" aria-hidden="true"></i><strong>السندات والتقارير</strong><span>توثيق ومتابعة العمليات</span></div>
           </div>
-          <div class="input-icon password-wrap">
-            <i class="fa-solid fa-lock"></i>
-            <input id="login-password" name="password" type="password" placeholder="••••••••" autocomplete="current-password" required />
-            <button class="icon-button password-toggle" type="button" aria-label="إظهار كلمة المرور"><i class="fa-regular fa-eye"></i></button>
-          </div>
-
-          <label class="check-row"><input id="remember-device" type="checkbox" checked /><span>تذكر هذا الجهاز</span></label>
-          <button class="primary-button wide" type="submit"><span>دخول إلى النظام</span><i class="fa-solid fa-arrow-left-long"></i></button>
-        </form>
-
-        <div id="demo-login-note" class="demo-note">
-          <i class="fa-solid fa-flask"></i>
-          <div><strong>وضع العرض التجريبي</strong><span>استخدم الرقم 777000111 وكلمة مرور لا تقل عن 6 أحرف. لا توجد رسائل SMS أو OTP.</span></div>
         </div>
-      </div>
-      <p class="copyright">© <span id="current-year"></span> نظام إدارة الزكاة والتبرعات</p>
-    </main>
+      </section>
+
+      <main class="login-panel" aria-labelledby="login-title">
+        <div class="login-card">
+          <div class="mobile-brand">
+            <img src="assets/logo.svg" alt="" />
+            <div><strong>نظام الزكاة</strong><span>والتبرعات</span></div>
+          </div>
+          <header class="login-heading">
+            <span class="login-greeting">أهلًا بعودتك</span>
+            <h1 id="login-title">تسجيل الدخول</h1>
+            <p>سجّل دخولك لمتابعة أعمالك وإدارة النظام.</p>
+          </header>
+
+          <form id="login-form" class="auth-form" autocomplete="on" aria-labelledby="login-title">
+            <div class="login-field">
+              <label class="field-label" for="login-phone">رقم الهاتف</label>
+              <div class="input-icon">
+                <i class="fa-regular fa-user" aria-hidden="true"></i>
+                <input id="login-phone" name="phone" type="tel" inputmode="tel" placeholder="مثال: 777123456" autocomplete="username" dir="ltr" required />
+              </div>
+            </div>
+
+            <div class="login-field">
+              <label class="field-label" for="login-password">كلمة المرور</label>
+              <div class="input-icon password-wrap">
+                <i class="fa-solid fa-lock" aria-hidden="true"></i>
+                <input id="login-password" name="password" type="password" placeholder="أدخل كلمة المرور" autocomplete="current-password" required />
+                <button class="icon-button password-toggle" type="button" aria-label="إظهار كلمة المرور" aria-controls="login-password"><i class="fa-regular fa-eye" aria-hidden="true"></i></button>
+              </div>
+            </div>
+
+            <div class="login-options">
+              <label class="check-row"><input id="remember-device" type="checkbox" checked /><span>تذكر هذا الجهاز</span></label>
+              <button class="text-button" type="button" id="forgot-password">نسيت كلمة المرور؟</button>
+            </div>
+            <button class="primary-button wide" type="submit"><span>دخول إلى النظام</span><i class="fa-solid fa-arrow-left-long" aria-hidden="true"></i></button>
+          </form>
+
+          <div id="demo-login-note" class="demo-note">
+            <i class="fa-solid fa-flask" aria-hidden="true"></i>
+            <div><strong>وضع العرض التجريبي</strong><span>استخدم الرقم <bdi>777000111</bdi> وكلمة مرور لا تقل عن 6 أحرف. لا توجد رسائل SMS أو OTP.</span></div>
+          </div>
+        </div>
+      </main>
+    </div>
+    <p class="copyright">© <span id="current-year"></span> نظام إدارة الزكاة والتبرعات</p>
   </div>
 
   <div id="app-shell" class="app-shell hidden">
