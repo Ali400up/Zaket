@@ -16,9 +16,13 @@ import { getDeviceName } from "./device-identity.js";
 import { buildNotifications, notificationCount, renderNotificationList } from "./notification-center.js";
 import { formatPrivateValue } from "./screen-values.js";
 import { convertCurrency, deriveExchangeRate, buildCashFlowSummary } from "./currency-service.js";
-import { filterSearchOptions, shouldUseSearchableSelect, createLatestRequest } from "./searchable-select.js";
+import { filterSearchOptions, shouldUseSearchableSelect, createLatestRequest, normalizeSearchText } from "./searchable-select.js";
 import { healthMetric, describeHealthError } from "./system-health.js";
 import { loadDashboardSections, retryDashboardSections } from "./dashboard-loader.js";
+import { createViewCache } from "./view-cache.js";
+import { readWithRetry } from "./read-retry.js";
+import { bindBeneficiaryAgeFields } from "./beneficiary-age.js";
+import { buildBeneficiaryDuplicateReport, findBeneficiaryDuplicateCandidates } from "./beneficiary-duplicates.js";
 import {
   escapeHtml, formatCurrency, formatDate, formatNumber, statusBadge, roleBadge, priorityBadge,
   initials, toast, openModal, closeModal, openDrawer, closeDrawer, confirmDialog, downloadText, objectDetails
@@ -27,6 +31,10 @@ import {
 const config = window.ZAKAT_CONFIG || {};
 const tableRequests = createLatestRequest();
 const dashboardRequests = createLatestRequest();
+const reportRequests = createLatestRequest();
+const reportExportRequests = createLatestRequest();
+const drawerRequests = createLatestRequest();
+const dashboardCache = createViewCache();
 let navigationRevision = 0;
 let foregroundNavigation = false;
 
@@ -156,6 +164,7 @@ function roleCanWrite(table, mode = "update") {
 const state = {
   session: null,
   currentScreen: "dashboard",
+  screenReady: false,
   previousScreen: "dashboard",
   classificationTab: "beneficiary_categories",
   dashboardCurrency: config.currency || "YER",
@@ -222,6 +231,15 @@ function showLogin() {
   clearTimeout(notificationRefreshTimer);
   tableRequests.cancel();
   dashboardRequests.cancel();
+  reportRequests.cancel();
+  reportExportRequests.cancel();
+  drawerRequests.cancel();
+  dashboardCache.clear();
+  state.reportPaging = null;
+  state.activityPaging = null;
+  state.duplicatePaging = null;
+  state.screenReady = false;
+  state.dashboardBusy = false;
   destroyCharts();
   state.notifications = [];
   state.notificationsLoaded = false;
@@ -275,7 +293,16 @@ function buildNavigation() {
   }).join("");
 }
 
-async function navigate(screenId, updateHash = true) {
+async function navigate(screenId, updateHash = true, { force = false } = {}) {
+  if (!routeMap.hasOwnProperty(screenId)) screenId = "dashboard";
+  if (!canAccess(screenId)) {
+    toast("لا تملك صلاحية فتح هذه الشاشة.", "error");
+    screenId = "dashboard";
+  }
+  if (!force && state.currentScreen === screenId && (state.screenReady || foregroundNavigation)) {
+    els.sidebar.classList.remove("open");
+    return;
+  }
   const revision = ++navigationRevision;
   foregroundNavigation = true;
   dataService.pauseBeneficiarySync();
@@ -283,14 +310,13 @@ async function navigate(screenId, updateHash = true) {
   clearTimeout(notificationRefreshTimer);
   tableRequests.cancel();
   dashboardRequests.cancel();
-  if (!routeMap.hasOwnProperty(screenId)) screenId = "dashboard";
-  if (!canAccess(screenId)) {
-    toast("لا تملك صلاحية فتح هذه الشاشة.", "error");
-    screenId = "dashboard";
-  }
+  reportRequests.cancel();
+  reportExportRequests.cancel();
+  drawerRequests.cancel();
   destroyCharts();
   if (screenId === "ai-assistant" && state.currentScreen !== "ai-assistant") state.previousScreen = state.currentScreen;
   state.currentScreen = screenId;
+  state.screenReady = false;
   state.table = { page: 1, pageSize: config.pageSize || 10, search: "", filters: {}, dateFrom: "", dateTo: "" };
   if (updateHash) history.pushState(null, "", `#${screenId}`);
   const meta = getScreenMeta(screenId);
@@ -301,11 +327,11 @@ async function navigate(screenId, updateHash = true) {
   document.title = `${meta.label} | ${config.appName || "نظام الزكاة"}`;
   buildNavigation();
   els.sidebar.classList.remove("open");
-  setLoading();
+  if (screenId !== "dashboard" || !dashboardCache.read(dashboardScopeKey())) setLoading();
   dataService.touchSession().catch(error => console.warn("تعذر تحديث وقت نشاط الجلسة", error));
 
   try {
-    if (screenId === "dashboard") await renderDashboard();
+    if (screenId === "dashboard") await renderDashboard({ force });
     else if (screenId === "ai-assistant") await renderAssistantScreen(els.pageContent, dataService, state.session, { currentScreen: state.previousScreen });
     else if (screenId === "global-search") await renderReports();
     else if (screenId === "guide") await renderGuide();
@@ -318,6 +344,7 @@ async function navigate(screenId, updateHash = true) {
       const cfgKey = configKeyMap[table];
       await renderDataScreen(screenConfigs[cfgKey]);
     }
+    if (revision === navigationRevision) state.screenReady = true;
   } catch (error) {
     if (error?.name === "AbortError" || revision !== navigationRevision || state.currentScreen !== screenId) return;
     console.error(error);
@@ -333,6 +360,11 @@ async function navigate(screenId, updateHash = true) {
   if (revision === navigationRevision) els.pageContent.focus({ preventScroll: true });
 }
 
+function dashboardScopeKey() {
+  const session = state.session || {}, profile = session.profile || {};
+  return JSON.stringify([config.supabaseUrl || "demo", session.user?.id || profile.id, profile.id, profile.role, profile.delegate_id, profile.branch_id, session.deviceFingerprint]);
+}
+
 function dashboardMetric(iconClass, color, label, value, foot, screen) {
   return `<button class="metric-card" data-nav="${screen}">
     <div class="metric-top"><span class="metric-icon ${color}"><i class="${iconClass}" aria-hidden="true"></i></span><span class="metric-open" aria-hidden="true"><i class="fa-solid fa-arrow-left"></i></span></div>
@@ -342,7 +374,7 @@ function dashboardMetric(iconClass, color, label, value, foot, screen) {
 
 function dashboardQuerySpecs() {
   const count = (key, label, table, filters = {}) => ({ key, label, load: ({ signal }) => dataService.count(table, { filters, signal }) });
-  const rows = (key, label, table, options) => ({ key, label, load: ({ signal }) => dataService.dashboardRows(table, { ...options, signal }) });
+  const rows = (key, label, table, options) => ({ key, label, load: ({ signal, progress }) => dataService.dashboardRows(table, { ...options, signal, onProgress: progress }) });
   return [
     count("approvedBeneficiaries", "عدد المستفيدين المعتمدين", "beneficiaries", { status: "approved" }),
     count("totalBeneficiaries", "إجمالي ملفات المستفيدين", "beneficiaries"),
@@ -350,12 +382,12 @@ function dashboardQuerySpecs() {
     count("campaigns", "إجمالي الحملات", "campaigns"),
     count("pendingCash", "الصرف النقدي تحت المراجعة", "cash_payments", { status: "under_review" }),
     count("pendingInKind", "الصرف العيني تحت المراجعة", "in_kind_payments", { status: "under_review" }),
-    rows("receipts", "ملخص القبض النقدي", "cash_receipts", { columns: "id,amount,currency,status,receipt_date", filters: { status: "posted" }, all: true }),
-    rows("payments", "ملخص الصرف النقدي", "cash_payments", { columns: "id,amount,currency,status,payment_date", filters: { status: "posted" }, all: true }),
-    rows("items", "المخزون", "items", { source: "v_items_inventory", columns: "id,name,min_stock,available_qty", all: true }),
     rows("recentReceipts", "أحدث سندات القبض", "cash_receipts", { source: "v_cash_receipts", columns: "id,voucher_no,receipt_date,created_at,amount,currency,status,donor_display_name,campaign_name", newest: true, maxRows: 6 }),
     rows("recentPayments", "أحدث سندات الصرف", "cash_payments", { source: "v_cash_payments", columns: "id,voucher_no,payment_date,created_at,amount,currency,status,beneficiary_name,campaign_name", newest: true, maxRows: 6 }),
-    rows("beneficiaries", "فحص عينة هواتف المستفيدين", "beneficiaries", { columns: "id,phone", maxRows: 1000 })
+    rows("beneficiaries", "فحص عينة هواتف المستفيدين", "beneficiaries", { columns: "id,phone", maxRows: 1000 }),
+    rows("receipts", "ملخص القبض النقدي", "cash_receipts", { columns: "id,amount,currency,status,receipt_date", filters: { status: "posted" }, all: true }),
+    rows("payments", "ملخص الصرف النقدي", "cash_payments", { columns: "id,amount,currency,status,payment_date", filters: { status: "posted" }, all: true }),
+    rows("items", "المخزون", "items", { source: "v_items_inventory", columns: "id,name,min_stock,available_qty", all: true })
   ];
 }
 
@@ -367,18 +399,38 @@ function dashboardSectionMessage(snapshot, key) {
   return snapshot[key]?.status === "success" ? "" : "جاري التحميل...";
 }
 
-async function renderDashboard() {
+async function renderDashboard({ force = false } = {}) {
   const request = dashboardRequests.begin();
   const session = state.session, profileId = String(session?.profile?.id || "");
-  const current = () => request.isCurrent() && state.currentScreen === "dashboard" && state.session === session && String(state.session?.profile?.id || "") === profileId;
+  const scope = dashboardScopeKey();
+  const current = () => request.isCurrent() && state.currentScreen === "dashboard" && state.session === session && String(state.session?.profile?.id || "") === profileId && scope === dashboardScopeKey();
+  const cached = dashboardCache.read(scope);
+  if (cached) renderDashboardContent(cached.value, current);
+  if (cached?.fresh && !force) return;
+  state.dashboardBusy = true;
   try {
-    const sources = dashboardQuerySpecs();
-    const onUpdate = snapshot => { if (current()) renderDashboardContent(snapshot, current); };
+    let sources = dashboardQuerySpecs();
+    const baseline = cached?.value || {};
+    // An interrupted partial load resumes missing sections. Stale complete
+    // snapshots keep their values while all independent reads revalidate them.
+    const missing = sources.filter(source => baseline[source.key]?.status !== "success");
+    if (cached && !force && missing.length) sources = missing;
+    const onUpdate = partial => {
+      if (!current()) return;
+      const snapshot = { ...baseline, ...partial };
+      for (const [key,section] of Object.entries(partial)) {
+        if (section.status !== "success" && baseline[key]?.status === "success") snapshot[key] = baseline[key];
+      }
+      const complete = Object.values(partial).every(section => section.status === "success") && dashboardQuerySpecs().every(source => snapshot[source.key]?.status === "success");
+      dashboardCache.save(scope,snapshot,{ complete });
+      renderDashboardContent(snapshot, current);
+    };
     const snapshot = await loadDashboardSections(sources, { signal: request.signal, onUpdate });
     if (current()) retryDashboardSections(sources, snapshot, {
       signal: request.signal, isCurrent: current, onUpdate
     }).catch(error => { if (error?.name !== "AbortError" && current()) console.warn("تعذر استئناف تحميل اللوحة", error); });
   } catch (error) { if (error?.name !== "AbortError" && current()) throw error; }
+  finally { if (current()) state.dashboardBusy = false; }
 }
 
 function renderDashboardContent(snapshot, current = () => true) {
@@ -411,12 +463,7 @@ function renderDashboardContent(snapshot, current = () => true) {
     .sort((a, b) => String(b.created_at || b.receipt_date || b.payment_date).localeCompare(String(a.created_at || a.receipt_date || a.payment_date))).slice(0, 6);
 
   const lowStock = items.data.filter(x => Number(x.available_qty || 0) <= Number(x.min_stock || 0));
-  const seenPhones = new Set();
-  const duplicateCandidates = beneficiaries.data.filter(row => {
-    if (!row.phone) return false;
-    if (seenPhones.has(row.phone)) return true;
-    seenPhones.add(row.phone); return false;
-  });
+  const duplicateCandidates = buildBeneficiaryDuplicateReport(beneficiaries.data).data;
   const pendingCount = pendingReady ? snapshot.pendingCash.value.total + snapshot.pendingInKind.value.total : 0;
 
   els.pageContent.innerHTML = `
@@ -497,17 +544,38 @@ function renderToolbar(cfg, prependToolbar = "") {
   </div></section>`;
 }
 
+function screenStatusFilter(cfg) {
+  const column = cfg.columns?.find(col => col.key === "status")
+    || cfg.columns?.find(col => col.type === "boolean-status")
+    || cfg.columns?.find(col => ["result","delivery_status"].includes(col.key));
+  if (!column) return { key: null, options: [] };
+  if (column.type === "boolean-status") return { key: column.key, options: [["true","نشط"],["false","موقوف"]] };
+  const known = {
+    beneficiaries: ["draft","under_review","approved","rejected","suspended"],
+    campaigns: ["setup","open","closed"], account_closings: ["closed","reopened"],
+    campaign_distributors: ["active","suspended","settled"],
+    audit_logs: ["success","failed"], login_attempts: ["success","failed"],
+    authorized_devices: ["pending","approved","blocked"],
+    user_sessions: ["active","ended","expired"], import_jobs: ["queued","running","completed","failed"],
+    distribution_assignments: ["pending","delivered"]
+  };
+  const values = known[cfg.table] || (column.key === "status" ? ["draft","under_review","approved","posted","cancelled"] : []);
+  return { key: column.key, options: values.map(value => [value,statusLabels[value] || value]) };
+}
+
+function getScreenDateKey(cfg) {
+  return cfg.dateKey || cfg.columns?.find(col => ["created_at","receipt_date","payment_date","start_date","login_at","attempted_at","closed_at","assigned_at"].includes(col.key) || ["created_at","closed_at"].includes(col.subKey))?.subKey
+    || cfg.columns?.find(col => ["created_at","receipt_date","payment_date","start_date","login_at","attempted_at","closed_at","assigned_at"].includes(col.key))?.key || null;
+}
+
 function genericFilters(cfg) {
-  const statusColumn = cfg.columns.find(c => c.type === "status" || c.type === "boolean-status");
-  const statusKey = statusColumn?.type === "boolean-status" ? (statusColumn.key || "is_active") : "status";
-  const statusOptions = statusColumn?.type === "boolean-status"
-    ? [["true", "نشط"], ["false", "موقوف"]]
-    : ["active", "inactive", "draft", "under_review", "approved", "posted", "cancelled", "open", "closed", "completed", "reopened"].map(value => [value, statusLabels[value] || value]);
+  const { key: statusKey, options: statusOptions } = screenStatusFilter(cfg);
+  const dateKey = getScreenDateKey(cfg);
   return `<section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="table-search" value="${escapeHtml(state.table.search)}" placeholder="${cfg.table === "beneficiaries" && state.table.searchMode !== "all" ? "ابحث بالاسم أو رقم الملف..." : `ابحث في ${escapeHtml(cfg.title)}...`}" /></div>
     ${cfg.table === "beneficiaries" ? `<div class="filter-control"><select id="beneficiary-search-mode" aria-label="نطاق البحث"><option value="name" ${state.table.searchMode !== "all" ? "selected" : ""}>الاسم / رقم الملف — سريع</option><option value="all" ${state.table.searchMode === "all" ? "selected" : ""}>بحث شامل — الهاتف والهوية وبقية الحقول</option></select></div>` : ""}
-    ${statusColumn ? `<div class="filter-control"><select id="status-filter" data-filter-key="${statusKey}"><option value="">كل الحالات</option>${statusOptions.map(([value, label]) => `<option value="${value}" ${String(state.table.filters[statusKey] ?? "") === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></div>` : `<div class="filter-control"><select disabled><option>كل الحالات</option></select></div>`}
-    <div class="filter-control"><input id="date-from-filter" type="date" title="من تاريخ" value="${escapeHtml(state.table.dateFrom || "")}" /></div>
-    <div class="filter-control"><input id="date-to-filter" type="date" title="إلى تاريخ" value="${escapeHtml(state.table.dateTo || "")}" /></div>
+    ${statusKey ? `<div class="filter-control"><select id="status-filter" data-filter-key="${statusKey}"><option value="">كل الحالات</option>${statusOptions.map(([value, label]) => `<option value="${value}" ${String(state.table.filters[statusKey] ?? "") === value ? "selected" : ""}>${escapeHtml(label)}</option>`).join("")}</select></div>` : `<div class="filter-control"><select disabled><option>كل الحالات</option></select></div>`}
+    <div class="filter-control"><input id="date-from-filter" type="date" title="من تاريخ" value="${escapeHtml(state.table.dateFrom || "")}" ${dateKey ? "" : "disabled"} /></div>
+    <div class="filter-control"><input id="date-to-filter" type="date" title="إلى تاريخ" value="${escapeHtml(state.table.dateTo || "")}" ${dateKey ? "" : "disabled"} /></div>
     <button class="secondary-button" data-refresh-table><i class="fa-solid fa-rotate"></i> تحديث</button></section>`;
 }
 
@@ -515,27 +583,52 @@ async function renderDataScreen(cfg, options = {}) {
   if (!cfg) throw new Error("تعذر العثور على إعدادات الشاشة.");
   const request = tableRequests.begin();
   const screen = state.currentScreen, account = state.session?.profile?.id;
-  const tableOptions = { ...state.table, filters: { ...state.table.filters }, dateKey: cfg.dateKey, signal: request.signal };
+  const cursorKey = JSON.stringify([cfg.table,state.table.search,state.table.filters,state.table.dateFrom,state.table.dateTo,state.table.pageSize]);
+  if (state.table.cursorKey !== cursorKey) { state.table.cursorKey = cursorKey; state.table.cursors = { 1: null }; }
+  const tableOptions = { ...state.table, filters: { ...state.table.filters }, columns: listScreenColumns(cfg), cursor: state.table.cursors[state.table.page] || null, dateKey: getScreenDateKey(cfg), signal: request.signal };
   state.currentConfig = cfg;
+  state.currentRows = [];
+  const tableBody = els.pageContent.querySelector(".table-card");
+  const placeholder = `<section class="table-card"><header class="table-card-header"><h3>${escapeHtml(cfg.title)}</h3></header><div class="empty-state" role="status"><span class="spinner"></span><p>جاري تحميل السجلات...</p></div></section>`;
+  if (tableBody && document.getElementById("table-search")) tableBody.outerHTML = placeholder;
+  else els.pageContent.innerHTML = `${renderToolbar(cfg,options.prependToolbar || "")}${genericFilters(cfg)}${placeholder}`;
   let result;
-  try { result = await dataService.list(cfg.table, tableOptions); }
+  try { result = await readWithRetry(({ signal }) => dataService.listPage(cfg.table,{ ...tableOptions, signal }),{ signal: request.signal }); }
   catch (error) { if (!request.isCurrent() || error?.name === "AbortError") return false; throw error; }
   if (!request.isCurrent() || screen !== state.currentScreen || account !== state.session?.profile?.id) return false;
   state.currentRows = result.data;
   state.currentPrint = { title: cfg.title, columns: cfg.columns };
-  const totalPages = Math.max(1, Math.ceil(result.total / state.table.pageSize));
   if (result.page) state.table.page = result.page;
-  if (state.table.page > totalPages) state.table.page = totalPages;
+  if (result.nextCursor) state.table.cursors[state.table.page + 1] = result.nextCursor;
+  const knownTotal = Number.isFinite(result.total);
+  const totalPages = knownTotal ? Math.max(1,Math.ceil(result.total / state.table.pageSize)) : null;
+  if (knownTotal && state.table.page > totalPages) state.table.page = totalPages;
 
   els.pageContent.innerHTML = `${renderToolbar(cfg, options.prependToolbar || "")}${genericFilters(cfg)}${result.source === "cache" && cfg.table === "beneficiaries" ? '<div class="info-callout">آخر أسماء محفوظة دون اتصال. اتصل بالخادم لعرض التفاصيل والتحقق قبل التسليم.</div>' : ""}
-    <section class="table-card"><header class="table-card-header"><div class="table-title-block"><span class="table-title-icon" aria-hidden="true">${renderMenuIcon(getScreenMeta(state.currentScreen).icon)}</span><div><h3>${escapeHtml(cfg.title)}</h3><p>${formatNumber(result.total)} سجل • الصفحة ${state.table.page} من ${totalPages}</p></div></div><span class="table-view-label"><i class="fa-solid fa-table-list" aria-hidden="true"></i> السجلات</span></header>
+    <section class="table-card"><header class="table-card-header"><div class="table-title-block"><span class="table-title-icon" aria-hidden="true">${renderMenuIcon(getScreenMeta(state.currentScreen).icon)}</span><div><h3>${escapeHtml(cfg.title)}</h3><p>${knownTotal ? `${formatNumber(result.total)} سجل • الصفحة ${state.table.page} من ${totalPages}` : `الصفحة ${state.table.page} • ${formatNumber(result.data.length)} سجلات`}</p></div></div><span class="table-view-label"><i class="fa-solid fa-table-list" aria-hidden="true"></i> السجلات</span></header>
     ${renderTable(cfg, result.data)}
-    <footer class="table-footer"><span>عرض ${result.data.length ? (state.table.page - 1) * state.table.pageSize + 1 : 0} - ${Math.min(state.table.page * state.table.pageSize, result.total)} من ${result.total}</span><div class="pagination">
-      <button class="page-button" data-page="${Math.max(1, state.table.page - 1)}" ${state.table.page === 1 ? "disabled" : ""}><i class="fa-solid fa-chevron-right"></i></button>
-      ${paginationButtons(state.table.page, totalPages)}
-      <button class="page-button" data-page="${Math.min(totalPages, state.table.page + 1)}" ${state.table.page === totalPages ? "disabled" : ""}><i class="fa-solid fa-chevron-left"></i></button>
-    </div></footer></section>`;
+    ${renderPageFooter(result,state.table)}</section>`;
   return true;
+}
+
+function listScreenColumns(cfg) {
+  const columns = new Set(["id"]);
+  for (const col of cfg.columns || []) { columns.add(col.key); if (col.subKey) columns.add(col.subKey); }
+  for (const field of cfg.fields || []) if ((field.type === "file" && field.key.endsWith("_url")) || ["status","receipt_status","is_active","currency"].includes(field.key)) columns.add(field.key);
+  if (cfg.table === "authorized_devices") columns.add("license_kind");
+  if (["campaign_distributors","cash_transfers"].includes(cfg.table)) columns.add("currency");
+  return [...columns].join(",");
+}
+
+function renderPageFooter(result, paging, attribute = "data-page") {
+  const knownTotal = Number.isFinite(result.total);
+  const page = paging.page, size = paging.pageSize;
+  const pages = knownTotal ? Math.max(1,Math.ceil(result.total / size)) : null;
+  const from = result.data.length ? (page - 1) * size + 1 : 0;
+  const to = result.data.length ? from + result.data.length - 1 : 0;
+  const hasMore = knownTotal ? page < pages : result.hasMore;
+  const numbers = knownTotal && attribute === "data-page" ? paginationButtons(page,pages) : `<span class="page-button active" aria-current="page">${page}</span>`;
+  return `<footer class="table-footer"><span>عرض ${from} - ${to}${knownTotal ? ` من ${formatNumber(result.total)}` : ""}</span><div class="pagination"><button class="page-button" ${attribute}="${Math.max(1,page - 1)}" ${page <= 1 ? "disabled" : ""} aria-label="الصفحة السابقة"><i class="fa-solid fa-chevron-right"></i></button>${numbers}<button class="page-button" ${attribute}="${page + 1}" ${hasMore ? "" : "disabled"} aria-label="الصفحة التالية"><i class="fa-solid fa-chevron-left"></i></button></div></footer>`;
 }
 
 function paginationButtons(current, total) {
@@ -627,7 +720,7 @@ async function loadRelationOptions(field) {
   if (!["relation", "autocompleteRelation"].includes(field.type)) return [];
   const result = field.relation.table === "beneficiaries"
     ? { data: await dataService.beneficiaryOptions(field.relation.filter || {}) }
-    : await dataService.list(field.relation.table, { pageSize: 1000, filters: field.relation.filter || {} });
+    : await dataService.listAll(field.relation.table, { filters: field.relation.filter || {} });
   return result.data.map(row => {
     const base = row[field.relation.label] || row.name || row.full_name || row.voucher_no || row.id;
     const label = field.relation.table === "cashboxes" ? `${base} — ${formatCurrency(row.current_balance, row.currency)} (${row.currency || config.currency})` : base;
@@ -649,7 +742,7 @@ async function openRecordForm(cfg, record = null, copyMode = false) {
   const relationMap = new Map(relationFields.map((f, i) => [f.key, relationResults[i]]));
   const hasFileFields = activeFields.some(field => field.type === "file");
   const attachmentSettings = hasFileFields ? (await dataService.list("system_settings", { pageSize: 1 })).data[0] || {} : {};
-  const itemResult = activeFields.some(f => f.type === "lineItems") ? await dataService.list("items", { pageSize: 1000, filters: { is_active: true } }) : { data: [] };
+  const itemResult = activeFields.some(f => f.type === "lineItems") ? await dataService.listAll("items", { filters: { is_active: true } }) : { data: [] };
   const currencyResult = cfg.table === "currency_exchanges" ? await dataService.list("currencies", { pageSize: 200, filters: { is_active: true } }) : { data: [] };
   let values = record ? { ...record } : {};
   if (cfg.table === "profiles") values.first_device_auto_approve = Boolean(values.first_device_auto_approve_until && new Date(values.first_device_auto_approve_until) > new Date());
@@ -678,6 +771,7 @@ async function openRecordForm(cfg, record = null, copyMode = false) {
   saveButton.addEventListener("click", async () => {
     let recordPersisted = false;
     try {
+      if (!document.getElementById("record-form").reportValidity()) return;
       let payload = await collectFormData(activeFields);
       payload = await preparePayloadForSave(cfg, payload, relationMap);
       const missing = activeFields.filter(f => (f.required || (!record && f.requiredOnCreate)) && isEmptyValue(payload[f.key]));
@@ -749,8 +843,8 @@ function renderFormField(field, value, relationOptions = [], itemOptions = []) {
   } else if (field.type === "textarea") {
     control = `<textarea ${common} placeholder="${escapeHtml(field.placeholder || "")}">${escapeHtml(value ?? resolveFieldDefault(field) ?? "")}</textarea>`;
   } else {
-    const type = field.type === "currency" ? "number" : (field.type || "text");
-    control = `<input ${common} type="${type}" value="${escapeHtml(value ?? resolveFieldDefault(field) ?? "")}" placeholder="${escapeHtml(field.placeholder || "")}" ${field.min !== undefined ? `min="${field.min}"` : ""} ${field.max !== undefined ? `max="${field.max}"` : ""} ${["number", "currency"].includes(field.type) ? `step="${field.step ?? (field.type === "currency" ? "0.01" : "1")}"` : ""} />`;
+    const type = field.key === "age" ? "text" : field.type === "currency" ? "number" : (field.type || "text");
+    control = `<input ${common} type="${type}" ${field.key === "age" ? 'inputmode="numeric"' : ""} value="${escapeHtml(value ?? resolveFieldDefault(field) ?? "")}" placeholder="${escapeHtml(field.placeholder || "")}" ${field.min !== undefined ? `min="${field.min}"` : ""} ${field.max !== undefined ? `max="${field.max}"` : ""} ${["number", "currency"].includes(field.type) ? `step="${field.step ?? (field.type === "currency" ? "0.01" : "1")}"` : ""} />`;
   }
   return `<div class="form-field ${full}">${label}${control}${field.help ? `<span class="help-text">${escapeHtml(field.help)}</span>` : ""}</div>`;
 }
@@ -824,6 +918,7 @@ function resolveFieldDefault(field) {
 }
 
 function bindSmartFormFields(cfg, relationMap = new Map(), currencyRows = [], editing = false) {
+  if (cfg.table === "beneficiaries") bindBeneficiaryAgeFields(document.getElementById("record-form"));
   const role = state.session?.profile?.role || "data_entry";
   document.querySelectorAll("[data-smart-select]").forEach(wrapper => {
     const search = wrapper.querySelector('input[type="search"]');
@@ -1195,8 +1290,7 @@ async function handleRowAction(action, id) {
     } else if (action === "reset-password") {
       return openResetPassword(record);
     } else if (action === "activity") {
-      const activity = await dataService.list("audit_logs", { pageSize: 500, filters: { user_id: record.user_id || record.id } });
-      return openDrawer(`نشاط ${record.user_name || record.full_name || "المستخدم"}`, activity.data.length ? renderSimpleRows(activity.data, ["created_at", "action", "table_name", "record_id", "result"]) : `<div class="empty-state"><i class="fa-solid fa-clock-rotate-left"></i><h3>لا توجد عمليات مسجلة</h3></div>`);
+      return openActivityDrawer(record);
     } else if (action === "download-template") {
       const table = importDefinitions[record.target_table] ? record.target_table : "beneficiaries";
       return downloadImportTemplate(table);
@@ -1334,10 +1428,20 @@ async function printSettingsSample() {
 }
 
 async function showDuplicateCheck(record) {
-  const all = await dataService.list("beneficiaries", { pageSize: 1000 });
-  const normalize = s => String(s || "").replace(/\s+/g, "").toLowerCase();
-  const similar = all.data.filter(x => x.id !== record.id && ((record.national_id && x.national_id === record.national_id) || (record.phone && x.phone === record.phone) || normalize(x.full_name).includes(normalize(record.full_name).slice(0, 5))));
-  openDrawer("نتيجة فحص التكرار", similar.length ? `<div class="alert-item warning"><i class="fa-solid fa-clone"></i><div class="alert-copy"><strong>وجد النظام ${similar.length} ملفاً مشابهاً</strong><span>راجع البيانات قبل إنشاء أو اعتماد الملف.</span></div></div><div style="margin-top:14px">${similar.map(x => `<div class="detail-item" style="margin-bottom:8px"><span>${escapeHtml(x.file_no)}</span><strong>${escapeHtml(x.full_name)}</strong><small>${escapeHtml(x.phone || "بدون هاتف")} • ${escapeHtml(x.national_id || "بدون هوية")}</small></div>`).join("")}</div>` : `<div class="empty-state"><i class="fa-solid fa-circle-check"></i><h3>لم يجد النظام ملفاً مطابقاً</h3><p>يمكن متابعة المراجعة والاعتماد.</p></div>`);
+  const request = drawerRequests.begin(), scope = dashboardScopeKey();
+  openDrawer("نتيجة فحص التكرار",'<div class="empty-state"><span class="spinner"></span><p>جاري فحص الملفات المسموحة لك...</p></div>');
+  const all = await readWithRetry(({ signal, progress }) => readDuplicateBeneficiaries(signal,progress),{ signal: request.signal });
+  if (!request.isCurrent() || scope !== dashboardScopeKey() || document.getElementById("drawer-root").classList.contains("hidden") || document.getElementById("drawer-title").textContent !== "نتيجة فحص التكرار") return;
+  const rows = findBeneficiaryDuplicateCandidates(record,all.data);
+  state.duplicatePaging = { page: 1, pageSize: 20, rows, scope };
+  renderDuplicateCandidates();
+}
+
+function renderDuplicateCandidates() {
+  const paging = state.duplicatePaging;
+  if (!paging || paging.scope !== dashboardScopeKey()) return;
+  const data = paging.rows.slice((paging.page - 1) * paging.pageSize,paging.page * paging.pageSize);
+  document.getElementById("drawer-body").innerHTML = paging.rows.length ? `<div class="info-callout">${formatNumber(paging.rows.length)} ملف يحتاج مراجعة. الاشتراك في الاسم أو هاتف الأسرة لا يؤكد تكرار الشخص.</div>${renderTable({ columns: duplicateReportColumns, actions: [] },data)}${renderPageFooter({ data, total: paging.rows.length },paging,"data-duplicate-page")}` : '<div class="empty-state"><i class="fa-solid fa-circle-check"></i><h3>لم يُعثر على تطابق في الحقول المقارنة</h3><p>أكمل مراجعة الهوية وبيانات الاستحقاق.</p></div>';
 }
 
 async function showAidHistory(record) {
@@ -1369,7 +1473,7 @@ async function showItemMovements(record) {
 }
 
 async function showStockCheck(record) {
-  const items = await dataService.list("items", { pageSize: 1000 });
+  const items = await dataService.listAll("items");
   let details = record.details || [];
   if (record.distribution_type === "basket" && record.basket_id) {
     const basket = await dataService.get("baskets", record.basket_id);
@@ -1400,35 +1504,138 @@ function openResetPassword(record) {
   });
 }
 
+const duplicateReportColumns = [
+  { key: "file_no", label: "رقم الملف" },
+  { key: "full_name", label: "الاسم", type: "name" },
+  { key: "duplicate_reason", label: "سبب التشابه" },
+  { key: "duplicate_confidence_label", label: "التقييم" },
+  { key: "duplicate_group", label: "مجموعة المراجعة" },
+  { key: "status", label: "الاعتماد", type: "status" }
+];
+
+async function readDuplicateBeneficiaries(signal,progress) {
+  // Identity/phone evidence is ephemeral: it never enters the search IndexedDB.
+  return dataService.dashboardRows("beneficiaries", { columns: "id,file_no,full_name,phone,phone_secondary,national_id,status,created_at", all: true, signal, onProgress: progress });
+}
+
 async function renderReports() {
   const active = reportDefinitions.find(r => r.id === state.reportId) || reportDefinitions[0];
-  const reportTable = active.table;
-  const cfgKey = configKeyMap[reportTable];
-  const cfg = screenConfigs[cfgKey];
-  const data = await dataService.list(reportTable, { pageSize: 200 });
-  state.currentRows = data.data;
-  state.currentPrint = { title: active.title, columns: cfg?.columns || [] };
-  els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">اختر التقرير ثم استخدم الفلاتر والطباعة أو التصدير.</div><div class="toolbar-actions"><button class="ghost-button" data-export-report><i class="fa-solid fa-file-excel"></i> تصدير Excel</button><button class="primary-button" data-print-current><i class="fa-solid fa-print"></i> طباعة التقرير</button></div></section>
+  const cfg = screenConfigs[configKeyMap[active.table]];
+  const status = screenStatusFilter(cfg || { columns: [] });
+  const dateKey = cfg && getScreenDateKey(cfg);
+  state.reportPaging = { page: 1, pageSize: 20, search: "", filters: {}, dateFrom: "", dateTo: "", cursors: { 1: null }, duplicateData: null };
+  els.pageContent.innerHTML = `<section class="page-toolbar"><div class="page-description">اختر التقرير ثم استخدم الفلاتر والطباعة أو التصدير.</div><div class="toolbar-actions"><button class="ghost-button" data-export-report><i class="fa-solid fa-file-excel"></i> تصدير جميع النتائج</button><button class="primary-button" data-print-current><i class="fa-solid fa-print"></i> طباعة الصفحة</button></div></section>
     <section class="report-selector">${reportDefinitions.map(r => `<button class="report-card ${r.id === state.reportId ? "active" : ""}" data-report="${r.id}"><i class="${r.icon}"></i><strong>${escapeHtml(r.title)}</strong><span>${escapeHtml(r.description)}</span></button>`).join("")}</section>
-    <section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="report-search" placeholder="بحث داخل التقرير..."></div><div class="filter-control"><input type="date" id="report-from"></div><div class="filter-control"><input type="date" id="report-to"></div><div class="filter-control"><select id="report-status"><option value="">كل الحالات</option><option value="posted">مرحّل</option><option value="under_review">تحت المراجعة</option><option value="cancelled">ملغي</option></select></div><button class="secondary-button" id="apply-report-filter"><i class="fa-solid fa-filter"></i> تطبيق</button></section>
-    <section class="table-card"><header class="table-card-header"><div><h3>${escapeHtml(active.title)}</h3><p>${formatNumber(data.total)} نتيجة</p></div><span class="status-badge active">تقرير حي</span></header><div id="report-table-wrap">${cfg ? renderTable({ ...cfg, actions: [] }, data.data) : renderSimpleRows(data.data, Object.keys(data.data[0] || {}).slice(0, 7))}</div></section>`;
+    <section class="filter-bar"><div class="search-input"><i class="fa-solid fa-magnifying-glass"></i><input id="report-search" placeholder="بحث داخل التقرير..."></div><div class="filter-control"><input type="date" id="report-from" aria-label="من تاريخ" ${dateKey ? "" : "disabled"}></div><div class="filter-control"><input type="date" id="report-to" aria-label="إلى تاريخ" ${dateKey ? "" : "disabled"}></div><div class="filter-control"><select id="report-status" aria-label="حالة التقرير" data-filter-key="${status.key || ""}" ${status.key ? "" : "disabled"}><option value="">كل الحالات</option>${status.options.map(([value,label]) => `<option value="${value}">${escapeHtml(label)}</option>`).join("")}</select></div><button class="secondary-button" id="apply-report-filter"><i class="fa-solid fa-filter"></i> تطبيق</button></section>
+    ${active.id === "duplicates" ? '<div class="info-callout">تظهر الملفات التي تتشارك هوية صالحة للمقارنة أو هاتفاً أو اسماً كاملاً. تشابه الاسم أو هاتف الأسرة يحتاج مراجعة، ولا يؤكد أنه الشخص نفسه.</div>' : ""}
+    <section class="table-card"><header class="table-card-header"><div><h3>${escapeHtml(active.title)}</h3><p id="report-result-summary">جاري التحميل...</p></div><span class="status-badge active">تقرير حي</span></header><div id="report-table-wrap"></div></section>`;
+  return loadReportPage();
 }
 
 async function applyReportFilter() {
+  const paging = state.reportPaging;
+  if (!paging) return;
+  paging.search = document.getElementById("report-search").value.trim();
+  const statusControl = document.getElementById("report-status"), status = statusControl.value;
+  paging.filters = status && statusControl.dataset.filterKey ? { [statusControl.dataset.filterKey]: status === "true" ? true : status === "false" ? false : status } : {};
+  paging.dateFrom = document.getElementById("report-from").value;
+  paging.dateTo = document.getElementById("report-to").value;
+  paging.page = 1; paging.cursors = { 1: null };
+  return loadReportPage();
+}
+
+async function loadReportPage() {
+  reportExportRequests.cancel();
   const active = reportDefinitions.find(r => r.id === state.reportId) || reportDefinitions[0];
-  const cfg = screenConfigs[configKeyMap[active.table]];
-  const search = document.getElementById("report-search").value.trim().toLowerCase();
-  const status = document.getElementById("report-status").value;
-  const from = document.getElementById("report-from").value;
-  const to = document.getElementById("report-to").value;
-  let rows = (await dataService.list(active.table, { pageSize: 500 })).data;
-  rows = rows.filter(row => {
-    const raw = JSON.stringify(row).toLowerCase();
-    const date = row.created_at || row.receipt_date || row.payment_date || row.start_date || "";
-    return (!search || raw.includes(search)) && (!status || row.status === status) && (!from || date >= from) && (!to || date <= `${to}T23:59:59`);
-  });
-  state.currentRows = rows;
-  document.getElementById("report-table-wrap").innerHTML = cfg ? renderTable({ ...cfg, actions: [] }, rows) : renderSimpleRows(rows, Object.keys(rows[0] || {}).slice(0, 7));
+  const cfg = screenConfigs[configKeyMap[active.table]], paging = state.reportPaging;
+  const request = reportRequests.begin(), scope = dashboardScopeKey(), screen = state.currentScreen;
+  const current = () => request.isCurrent() && paging === state.reportPaging && screen === state.currentScreen && scope === dashboardScopeKey();
+  const wrap = document.getElementById("report-table-wrap");
+  if (!wrap || !paging) return;
+  state.currentRows = [];
+  delete paging.filteredRows;
+  wrap.innerHTML = '<div class="empty-state" role="status"><span class="spinner"></span><p>جاري تحميل التقرير...</p></div>';
+  let result, columns = cfg?.columns || [];
+  try {
+    if (active.id === "duplicates") {
+      if (!paging.duplicateData) {
+        const rows = await readWithRetry(({ signal, progress }) => readDuplicateBeneficiaries(signal,progress),{ signal: request.signal });
+        if (!current()) return;
+        paging.duplicateData = buildBeneficiaryDuplicateReport(rows.data);
+      }
+      const search = normalizeSearchText(paging.search);
+      const filtered = paging.duplicateData.data.filter(row => {
+        const text = normalizeSearchText([row.full_name,row.file_no,row.phone,row.national_id,row.duplicate_reason].join(" "));
+        return (!search || text.includes(search)) && (!paging.filters.status || row.status === paging.filters.status) && (!paging.dateFrom || row.created_at >= paging.dateFrom) && (!paging.dateTo || row.created_at <= `${paging.dateTo}T23:59:59.999`);
+      });
+      paging.filteredRows = filtered;
+      paging.page = Math.min(paging.page,Math.max(1,Math.ceil(filtered.length / paging.pageSize)));
+      result = { data: filtered.slice((paging.page - 1) * paging.pageSize,paging.page * paging.pageSize), total: filtered.length };
+      columns = duplicateReportColumns;
+    } else {
+      const dateKey = cfg && getScreenDateKey(cfg);
+      result = await readWithRetry(({ signal }) => dataService.listPage(active.table,{ ...paging, dateKey, columns: cfg ? listScreenColumns(cfg) : "id", cursor: paging.cursors[paging.page] || null, signal }),{ signal: request.signal });
+      if (result.nextCursor) paging.cursors[paging.page + 1] = result.nextCursor;
+    }
+    if (!current()) return;
+    state.currentRows = result.data;
+    state.currentPrint = { title: active.title, columns };
+    document.getElementById("report-result-summary").textContent = active.id === "duplicates" ? `${formatNumber(result.total)} ملف يحتاج مراجعة • فُحص ${formatNumber(paging.duplicateData.scannedCount)} ملف` : `الصفحة ${paging.page} • ${result.data.length} نتائج`;
+    wrap.innerHTML = `${renderTable({ ...(cfg || {}), columns, actions: [] },result.data)}${renderPageFooter(result,paging,"data-report-page")}`;
+  } catch (error) {
+    if (!current() || error?.name === "AbortError") return;
+    wrap.innerHTML = `<div class="empty-state"><h3>تعذر تنفيذ التقرير</h3><p>${escapeHtml(formatOperationError(error).message)}</p></div>`;
+  }
+}
+
+async function exportActiveReport(button) {
+  if (button.disabled) return;
+  const active = reportDefinitions.find(report => report.id === state.reportId) || reportDefinitions[0];
+  const paging = state.reportPaging;
+  if (!paging) return;
+  const request = reportExportRequests.begin(), scope = dashboardScopeKey(), screen = state.currentScreen;
+  const current = () => request.isCurrent() && paging === state.reportPaging && screen === state.currentScreen && scope === dashboardScopeKey();
+  const label = button.innerHTML;
+  button.disabled = true; button.textContent = "جاري تجهيز النتائج...";
+  try {
+    let rows = paging.filteredRows;
+    if (active.id !== "duplicates") {
+      const cfg = screenConfigs[configKeyMap[active.table]];
+      const result = await readWithRetry(({ signal, progress }) => dataService.listAll(active.table, {
+        search: paging.search, filters: { ...paging.filters }, dateFrom: paging.dateFrom, dateTo: paging.dateTo,
+        dateKey: cfg && getScreenDateKey(cfg), columns: cfg ? listScreenColumns(cfg) : "id",
+        cache: false, signal, onProgress: progress
+      }),{ signal: request.signal });
+      if (result.source === "cache") throw new Error("تصدير التقرير الكامل يحتاج اتصالاً بالخادم.");
+      rows = result.data;
+    }
+    if (!current()) return;
+    if (!Array.isArray(rows)) return toast("انتظر اكتمال تحميل التقرير ثم صدّر النتائج.","info");
+    exportRows(rows,`${active.id}.xlsx`);
+  } catch (error) {
+    if (current() && error?.name !== "AbortError") toast(error.message || "تعذر تجهيز التقرير.","error");
+  } finally { if (button.isConnected) { button.disabled = false; button.innerHTML = label; } }
+}
+
+async function openActivityDrawer(record) {
+  const title = `نشاط ${record.user_name || record.full_name || "المستخدم"}`;
+  state.activityPaging = { title, userId: record.user_id || record.id, page: 1, pageSize: 20, cursors: { 1: null }, scope: dashboardScopeKey() };
+  openDrawer(title,'<div class="empty-state"><span class="spinner"></span><p>جاري تحميل النشاط...</p></div>');
+  return loadActivityPage();
+}
+
+async function loadActivityPage() {
+  const paging = state.activityPaging, request = drawerRequests.begin();
+  if (!paging) return;
+  const current = () => request.isCurrent() && state.activityPaging === paging && paging.scope === dashboardScopeKey() && !document.getElementById("drawer-root").classList.contains("hidden") && document.getElementById("drawer-title").textContent === paging.title;
+  const body = document.getElementById("drawer-body");
+  body.innerHTML = '<div class="empty-state"><span class="spinner"></span><p>جاري تحميل النشاط...</p></div>';
+  try {
+    const result = await readWithRetry(({ signal }) => dataService.listPage("audit_logs",{ page: paging.page, pageSize: paging.pageSize, filters: { user_id: paging.userId }, cursor: paging.cursors[paging.page] || null, signal }),{ signal: request.signal });
+    if (!current()) return;
+    if (result.nextCursor) paging.cursors[paging.page + 1] = result.nextCursor;
+    body.innerHTML = `${result.data.length ? renderSimpleRows(result.data,["created_at","action","table_name","record_id","result"]) : '<div class="empty-state"><h3>لا توجد عمليات مسجلة</h3></div>'}${renderPageFooter(result,paging,"data-activity-page")}`;
+  } catch (error) { if (current() && error?.name !== "AbortError") body.innerHTML = `<div class="empty-state"><p>${escapeHtml(formatOperationError(error).message)}</p></div>`; }
 }
 
 async function renderSync() {
@@ -1864,7 +2071,7 @@ async function resolveImportRelations(parsed) {
   const maps = new Map();
   for (const spec of relationFields) {
     if (!maps.has(spec.relation.table)) {
-      const result = await dataService.list(spec.relation.table, { pageSize: 2000 });
+      const result = await dataService.listAll(spec.relation.table);
       maps.set(spec.relation.table, result.data);
     }
   }
@@ -1942,7 +2149,7 @@ async function openQuickDelivery() {
   try {
     [, delegateResult] = await Promise.all([
       dataService.searchBeneficiaries("", { filters: { status: "approved" }, pageSize: 12 }),
-      dataService.list("delegates", { pageSize: 1000 })
+      dataService.listAll("delegates")
     ]);
   } catch (error) {
     const loading = document.getElementById("quick-search-loading");
@@ -2119,7 +2326,8 @@ async function restoreBackupFile(file) {
 }
 
 async function refreshCurrentScreen() {
-  await navigate(state.currentScreen, false);
+  dashboardCache.invalidate();
+  await navigate(state.currentScreen, false, { force: true });
 }
 
 function updateConnectionStatus() {
@@ -2296,7 +2504,7 @@ async function handleGlobalClick(event) {
   const commandNav = event.target.closest("[data-command-nav]");
   if (commandNav) { closeCommandPalette(); return navigate(commandNav.dataset.commandNav); }
   if (event.target.closest("[data-close-modal]")) return closeModal();
-  if (event.target.closest("[data-close-drawer]")) return closeDrawer();
+  if (event.target.closest("[data-close-drawer]")) { drawerRequests.cancel(); return closeDrawer(); }
   if (event.target.closest("[data-close-command]")) return closeCommandPalette();
   if (event.target.closest("[data-retry]")) return refreshCurrentScreen();
   if (event.target.closest("[data-add-record]")) {
@@ -2322,13 +2530,19 @@ async function handleGlobalClick(event) {
   if (classTab) { state.classificationTab = classTab.dataset.classTab; state.table = { page: 1, pageSize: config.pageSize || 10, search: "", filters: {}, dateFrom: "", dateTo: "" }; return renderClassifications(); }
   const report = event.target.closest("[data-report]");
   if (report) { state.reportId = report.dataset.report; return renderReports(); }
+  const reportPage = event.target.closest("[data-report-page]");
+  if (reportPage && !reportPage.disabled && state.reportPaging) { state.reportPaging.page = Number(reportPage.dataset.reportPage); return loadReportPage(); }
+  const activityPage = event.target.closest("[data-activity-page]");
+  if (activityPage && !activityPage.disabled && state.activityPaging) { state.activityPaging.page = Number(activityPage.dataset.activityPage); return loadActivityPage(); }
+  const duplicatePage = event.target.closest("[data-duplicate-page]");
+  if (duplicatePage && !duplicatePage.disabled && state.duplicatePaging) { state.duplicatePaging.page = Number(duplicatePage.dataset.duplicatePage); return renderDuplicateCandidates(); }
   if (event.target.closest("[data-refresh-table]")) {
     if (state.currentConfig?.table === "beneficiaries") await dataService.refreshBeneficiaries();
     return refreshCurrentScreen();
   }
   if (event.target.closest("[data-print-current]")) return printCurrentView();
   if (event.target.closest("[data-export-current]")) return exportRows(state.currentRows, `${state.currentConfig?.table || "data"}.xlsx`);
-  if (event.target.closest("[data-export-report]")) return exportRows(state.currentRows, `${state.reportId}.xlsx`);
+  if (event.target.closest("[data-export-report]")) return exportActiveReport(event.target.closest("[data-export-report]"));
   if (event.target.closest("#apply-report-filter")) return applyReportFilter();
   if (event.target.closest("[data-sync-now]")) {
     const btn = event.target.closest("[data-sync-now]"); btn.disabled = true;
@@ -2382,15 +2596,26 @@ function bindEvents() {
     if (wasOffline && online) toast("عاد الاتصال الفعلي بالخادم.", "info");
   });
   window.addEventListener("zakat:queue-change", () => { updateQueueBadge(); scheduleNotificationRefresh(); });
-  window.addEventListener("zakat:data-change", scheduleNotificationRefresh);
+  const refreshDashboardAfterChange = debounce(() => {
+    if (state.session && state.currentScreen === "dashboard" && !foregroundNavigation) renderDashboard({ force: true }).catch(console.warn);
+  }, 300);
+  window.addEventListener("zakat:data-change", () => { dashboardCache.invalidate(); scheduleNotificationRefresh(); refreshDashboardAfterChange(); });
   const refreshIndexResults = debounce(() => {
     if (state.session && state.currentScreen === "beneficiaries" && document.getElementById("table-search")) {
       renderDataScreen(state.currentConfig).catch(error => toast(error.message || "تعذر تحديث البحث.", "error"));
     }
     document.getElementById("quick-beneficiary-name")?.dispatchEvent(new Event("input", { bubbles: true }));
   }, 150);
-  window.addEventListener("zakat:beneficiary-index-change", refreshIndexResults);
-  window.addEventListener("zakat:charts-ready", () => { if (state.currentScreen === "dashboard" && state.session) navigate("dashboard", false); });
+  window.addEventListener("zakat:beneficiary-index-change", () => { dashboardCache.invalidate(); refreshIndexResults(); refreshDashboardAfterChange(); });
+  window.addEventListener("zakat:charts-ready", () => {
+    const snapshot = dashboardCache.read(dashboardScopeKey());
+    if (state.currentScreen === "dashboard" && state.session && snapshot) renderDashboardContent(snapshot.value);
+  });
+  const refreshStaleDashboard = () => {
+    if (!document.hidden && state.session && state.currentScreen === "dashboard" && !foregroundNavigation && !state.dashboardBusy && !dashboardCache.read(dashboardScopeKey())?.fresh) renderDashboard().catch(console.warn);
+  };
+  setInterval(refreshStaleDashboard, 60_000);
+  window.addEventListener("focus",refreshStaleDashboard);
   window.addEventListener("zakat:assistant-ui-command", event => {
     const command = event.detail || {};
     if (command.type === "navigate" && typeof command.screen_id === "string") {
@@ -2407,7 +2632,7 @@ function bindEvents() {
   document.getElementById("profile-menu-button").addEventListener("click", () => openProfileMenu());
   document.addEventListener("keydown", e => {
     if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "k") { e.preventDefault(); openCommandPalette(); }
-    if (e.key === "Escape") { closeModal(); closeDrawer(); closeCommandPalette(); }
+    if (e.key === "Escape") { drawerRequests.cancel(); closeModal(); closeDrawer(); closeCommandPalette(); }
   });
   const searchTable = debounce(async (target, screen) => {
     if (!target.isConnected || screen !== state.currentScreen) return;

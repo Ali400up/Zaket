@@ -274,9 +274,9 @@ export const screenConfigs = {
       { key: "national_id", label: "رقم الهوية", type: "text", help: "اختياري، ويجب أن يكون فريداً عند إدخاله." },
       { key: "phone", label: "رقم الهاتف", type: "tel" },
       { key: "phone_secondary", label: "رقم هاتف إضافي", type: "tel" },
-      { key: "birth_date", label: "تاريخ الميلاد", type: "date" },
+      { key: "birth_date", label: "تاريخ الميلاد", type: "date", help: "يُحسب العمر من تاريخ الميلاد، ويمكنك تصحيح التاريخ قبل الحفظ." },
       { key: "gender", label: "الجنس", type: "select", options: [{ value: "male", label: "ذكر" }, { value: "female", label: "أنثى" }] },
-      { key: "age", label: "العمر", type: "number", min: 0, max: 120 },
+      { key: "age", label: "العمر", type: "number", min: 0, max: 120, help: "يُقدّر تاريخ الميلاد بالعمر واليوم والشهر الحاليين؛ أدخل التاريخ الفعلي إذا كان متاحاً." },
       { key: "marital_status", label: "الحالة الاجتماعية", type: "select", options: [
         { value: "single", label: "أعزب" }, { value: "married", label: "متزوج" }, { value: "widowed", label: "أرمل" }, { value: "divorced", label: "مطلق" }
       ]},
@@ -652,7 +652,7 @@ export const screenConfigs = {
     columns:[{key:"user_name",label:"المستخدم",type:"name",subKey:"role_name"},{key:"device_name",label:"الجهاز"},{key:"branch_name",label:"الفرع"},{key:"login_at",label:"وقت الدخول",type:"datetime"},{key:"last_activity_at",label:"آخر نشاط",type:"datetime"},{key:"status",label:"الحالة",type:"status"}],fields:[],actions:["view","activity"]
   },
   user_archives: {
-    title:"محفوظات المستخدم",description:"عمليات الإضافة INSERT والتعديل UPDATE والحذف DELETE لجميع المستخدمين، مع الجدول والسجل والوقت والنتيجة.",table:"audit_logs",icon:"fa-solid fa-box-archive",singular:"عملية محفوظة",primaryLabel:null,
+    title:"محفوظات المستخدم",description:"عمليات الإضافة INSERT والتعديل UPDATE والحذف DELETE لجميع المستخدمين، مع الجدول والسجل والوقت والنتيجة.",table:"audit_logs",dateKey:"created_at",icon:"fa-solid fa-box-archive",singular:"عملية محفوظة",primaryLabel:null,
     columns:[{key:"created_at",label:"التاريخ",type:"datetime"},{key:"user_name",label:"المستخدم"},{key:"action",label:"العملية",type:"name",subKey:"result"},{key:"table_name",label:"الجدول"},{key:"record_id",label:"معرف السجل"},{key:"result",label:"النتيجة",type:"status"}],fields:[],actions:["view"]
   },
   cashboxes: {
@@ -689,7 +689,7 @@ export const screenConfigs = {
   },
   units: {
     title:"دليل الوحدات",description:"وحدات القياس المستخدمة للأصناف مثل كيس وكرتون وحبة وكيلوغرام ولتر.",table:"units",icon:"fa-solid fa-ruler-combined",singular:"وحدة",primaryLabel:"إضافة وحدة",
-    importable:true,dateKey:"created_at",
+    importable:true,
     columns:[{key:"name",label:"الوحدة",type:"name",subKey:"symbol"},{key:"is_active",label:"الحالة",type:"boolean-status"}],fields:[{key:"name",label:"اسم الوحدة",type:"text",required:true},{key:"symbol",label:"الاختصار",type:"text"},{key:"is_active",label:"نشطة",type:"switch",default:true}],actions:["edit","toggle"]
   },
   warehouses: {
@@ -736,6 +736,7 @@ export const screenConfigs = {
     title: "سجل العمليات",
     description: "أثر تدقيقي غير قابل للتعديل لكل عملية حساسة داخل النظام.",
     table: "audit_logs",
+    dateKey: "created_at",
     icon: "fa-solid fa-clock-rotate-left",
     singular: "عملية",
     primaryLabel: null,

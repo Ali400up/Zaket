@@ -1,15 +1,9 @@
+import { normalizeDuplicatePhone } from "./beneficiary-duplicates.js";
 const severityRank = Object.freeze({ danger: 0, warning: 1, info: 2, success: 3 });
 
 function positiveCount(value) {
   const count = Number(value);
   return Number.isFinite(count) && count > 0 ? count : 0;
-}
-
-function normalizePhone(value) {
-  let digits = String(value || "").replace(/\D/g, "");
-  if (digits.startsWith("00967")) digits = digits.slice(5);
-  else if (digits.startsWith("967") && digits.length > 9) digits = digits.slice(3);
-  return digits;
 }
 
 function expiresWithin(expiryDate, now, alertDays) {
@@ -85,7 +79,7 @@ export function buildNotifications(snapshot = {}) {
 
   const phoneGroups = new Map();
   for (const row of snapshot.beneficiaries || []) {
-    const phone = normalizePhone(row?.phone);
+    const phone = normalizeDuplicatePhone(row?.phone);
     if (phone.length < 7) continue;
     phoneGroups.set(phone, (phoneGroups.get(phone) || 0) + 1);
   }

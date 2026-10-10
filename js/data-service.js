@@ -1137,7 +1137,8 @@ export const dataService = {
       const tracked = findById(db, "user_sessions", sessionId);
       if (!tracked || tracked.status !== "active") return false;
       tracked.last_activity_at = new Date().toISOString();
-      writeDemoDb(db);
+      // Activity tracking does not change dashboard/business data.
+      localStorage.setItem(DB_KEY, JSON.stringify(db));
       return true;
     }
     if (!isOnline()) return false;
@@ -1179,6 +1180,7 @@ export const dataService = {
       let rows = scopeRowsForSession(table, (db[table] || []).map(row => enrichDemoRow(db, table, row)), readStoredSession(), db.delegates || []);
       Object.entries(filters).forEach(([key,value]) => { if (value != null && value !== "") rows = rows.filter(row => String(row[key]) === String(value)); });
       rows.sort((a,b) => newest ? String(b.created_at || "").localeCompare(String(a.created_at || "")) || String(a.id).localeCompare(String(b.id)) : String(a.id).localeCompare(String(b.id)));
+      options.onProgress?.();
       return { data: (all ? rows : rows.slice(0,maxRows)).map(row => Object.fromEntries(columns.split(",").map(key => [key,row[key]]))), source: "demo" };
     }
     if (!supabase || !isOnline()) throw new Error("هذا القسم يحتاج اتصالاً بالخادم.");
@@ -1200,6 +1202,7 @@ export const dataService = {
       const { data: batch, error } = await query;
       if (signal?.aborted || key !== beneficiaryCacheScope(currentBeneficiaryScope())) throw new DOMException("Dashboard superseded", "AbortError");
       if (error) throw error;
+      options.onProgress?.();
       if (!batch?.length) break;
       data.push(...batch);
       // Recent rows are an explicitly limited preview. Complete datasets use ID keysets.
@@ -1223,11 +1226,88 @@ export const dataService = {
     return beneficiaryDirectory.all(filters);
   },
 
+  async listPage(table, options = {}) {
+    if (table === "beneficiaries") return this.list(table, options);
+    const pageSize = Math.max(1, Math.min(100, Number(options.pageSize) || 10));
+    const page = Math.max(1, Number(options.page) || 1);
+    const signal = options.signal;
+    const scope = beneficiaryCacheScope(currentBeneficiaryScope());
+    const audit = table === "audit_logs";
+    const columns = audit ? "id,user_id,action,table_name,record_id,result,created_at" : options.columns || "*";
+    let result;
+    if (audit && isSupabaseConfigured && supabase && isOnline()) {
+      // The indexed audit table supplies a tiny page. Large before/after JSON and
+      // a full joined count are fetched neither here nor in the archives screen.
+      const search = String(options.search || "").trim();
+      const source = search ? "v_audit_logs" : "audit_logs";
+      let query = supabase.from(source).select(columns);
+      for (const [key,value] of Object.entries(options.filters || {})) if (value != null && value !== "") query = query.eq(key,value);
+      if (search) query = query.ilike("search_text", `%${search.replace(/[\\%_]/g, "\\$&")}%`);
+      if (options.dateFrom) query = query.gte("created_at", options.dateFrom);
+      if (options.dateTo) query = query.lte("created_at", `${options.dateTo}T23:59:59.999`);
+      const cursor = options.cursor;
+      if (cursor) {
+        if (!/^[\w-]+$/.test(String(cursor.id)) || !/^\d{4}-\d{2}-\d{2}T[\d:.+-]+Z?$/.test(String(cursor.created_at))) throw new Error("موضع صفحة السجل غير صالح.");
+        query = query.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
+      }
+      query = query.order("created_at", { ascending: false }).order("id", { ascending: false }).range(0,pageSize);
+      if (signal) query = query.abortSignal(signal);
+      const { data, error } = await query;
+      if (error) throw error;
+      let rows = data || [];
+      const userIds = [...new Set(rows.slice(0,pageSize).map(row => row.user_id).filter(Boolean))];
+      if (userIds.length) {
+        let namesQuery = supabase.from("profiles").select("id,full_name,role").in("id",userIds);
+        if (signal) namesQuery = namesQuery.abortSignal(signal);
+        const names = await namesQuery;
+        if (signal?.aborted) throw new DOMException("Page superseded", "AbortError");
+        const users = new Map((names.error ? [] : names.data || []).map(row => [row.id,row]));
+        rows = rows.map(row => ({ ...row, user_name: users.get(row.user_id)?.full_name || "—", user_role: users.get(row.user_id)?.role || "" }));
+      }
+      result = { data: rows, source: "network" };
+    } else {
+      result = await this.list(table, { ...options, page: audit && options.cursor ? 1 : page, pageSize, columns, count: false, includeMore: true, strict: true, orderBy: audit ? "created_at" : options.orderBy || "id", ascending: options.ascending ?? false });
+    }
+    if (table === "campaign_distributors" && result.source === "network" && result.data.length) {
+      // The original view omits this action flag. Read it only for the visible
+      // IDs from the original base table, with the same authenticated RLS.
+      let flagsQuery = supabase.from(table).select("id,settled_at").in("id",result.data.slice(0,pageSize).map(row => row.id));
+      if (signal) flagsQuery = flagsQuery.abortSignal(signal);
+      const { data: flags, error } = await flagsQuery;
+      if (error) throw error;
+      const byId = new Map((flags || []).map(row => [row.id,row.settled_at]));
+      result.data = result.data.map(row => ({ ...row, settled_at: byId.get(row.id) || null }));
+    }
+    if (signal?.aborted || scope !== beneficiaryCacheScope(currentBeneficiaryScope())) throw new DOMException("Page superseded", "AbortError");
+    const rows = result.data.slice(0,pageSize);
+    const last = rows.at(-1);
+    return { ...result, data: rows, total: null, page, hasMore: result.data.length >= pageSize, nextCursor: audit && last ? { created_at: last.created_at, id: last.id } : null };
+  },
+
+  async listAll(table, options = {}) {
+    const scope = beneficiaryCacheScope(currentBeneficiaryScope());
+    if (isSupabaseConfigured && (!supabase || !isOnline())) return this.list(table,{ ...options, page: 1, pageSize: 500, count: false });
+    const data = []; let afterId = null;
+    while (true) {
+      const result = await this.list(table, { ...options, searchMode: table === "beneficiaries" ? "all" : options.searchMode, page: 1, pageSize: 250, count: false, cache: false, orderBy: "id", ascending: true, afterId, strict: true });
+      if (options.signal?.aborted || scope !== beneficiaryCacheScope(currentBeneficiaryScope())) throw new DOMException("Read superseded", "AbortError");
+      options.onProgress?.();
+      if (!result.data.length) break;
+      data.push(...result.data);
+      const id = String(result.data.at(-1).id || "");
+      if (!id || (afterId && id <= afterId)) throw new Error("تعذر إكمال البيانات بترتيب ثابت.");
+      afterId = id;
+    }
+    if (isSupabaseConfigured && options.cache !== false && (!options.columns || options.columns === "*")) cacheRows(table,data.slice(0,500));
+    return { data, total: data.length, source: isSupabaseConfigured ? "network" : "demo" };
+  },
+
   async refreshBeneficiaries() {
     await bindBeneficiaryDirectory(); await beneficiaryDirectory.refresh();
   },
 
   async list(table, options = {}) {
+    const readScope = beneficiaryCacheScope(currentBeneficiaryScope());
     const indexFields = BENEFICIARY_INDEX_FIELDS.split(",");
     const indexedOptions = Object.keys(options.filters || {}).every(field => indexFields.includes(field))
       && (!options.dateKey || indexFields.includes(options.dateKey)) && (!options.orderBy || indexFields.includes(options.orderBy));
@@ -1235,7 +1315,9 @@ export const dataService = {
       const result = await this.searchBeneficiaries(options.search || "", { ...options, orderBy: options.orderBy || "created_at", ascending: options.ascending ?? false });
       return hydrateBeneficiaryPage(result, options.signal);
     }
-    const { search = "", filters = {}, page = 1, pageSize = 500, orderBy = null, ascending = false, dateKey = null, dateFrom = "", dateTo = "" } = options;
+    const { search = "", filters = {}, page = 1, orderBy = null, ascending = false, dateKey = null, dateFrom = "", dateTo = "" } = options;
+    const pageSize = Math.max(1, Math.min(500, Number(options.pageSize) || 500));
+    const limit = pageSize + (options.includeMore ? 1 : 0);
     if (!isSupabaseConfigured) {
       const db = ensureDemoDb();
       const sourceRows = table === "stock_balances" ? buildDemoStockBalances(db) : (db[table] || []);
@@ -1253,13 +1335,17 @@ export const dataService = {
         rows = rows.filter(row => String(row[dateKey] || "") <= upperDate);
       }
       rows.sort((a, b) => {
-        const av = a[orderBy] ?? "";
-        const bv = b[orderBy] ?? "";
-        return ascending ? String(av).localeCompare(String(bv)) : String(bv).localeCompare(String(av));
+        const av = a[orderBy || "id"] ?? "", bv = b[orderBy || "id"] ?? "";
+        const comparison = String(av).localeCompare(String(bv)) || String(a.id).localeCompare(String(b.id));
+        return ascending ? comparison : -comparison;
       });
+      if (options.afterId) rows = rows.filter(row => String(row.id) > String(options.afterId));
+      if (options.cursor && table === "audit_logs") rows = rows.filter(row => row.created_at < options.cursor.created_at || (row.created_at === options.cursor.created_at && String(row.id) < String(options.cursor.id)));
       const total = rows.length;
       const from = (page - 1) * pageSize;
-      return { data: rows.slice(from, from + pageSize), total };
+      let data = rows.slice(from, from + limit);
+      if (options.columns && options.columns !== "*") data = data.map(row => Object.fromEntries([...options.columns.split(","), ...(table === "audit_logs" ? ["user_name","user_role"] : [])].map(key => [key,row[key]])));
+      return { data, total, source: "demo" };
     }
 
     if (!supabase || !isOnline()) {
@@ -1270,28 +1356,32 @@ export const dataService = {
       if (search) { const q = search.toLowerCase(); rows = rows.filter(row => JSON.stringify(row).toLowerCase().includes(q)); }
       if (dateKey && dateFrom) rows = rows.filter(row => String(row[dateKey] || "") >= dateFrom);
       if (dateKey && dateTo) rows = rows.filter(row => String(row[dateKey] || "") <= (dateKey.endsWith("_at") ? `${dateTo}T23:59:59.999` : dateTo));
-      return { data: rows.slice((page - 1) * pageSize, page * pageSize), total: rows.length, source: "cache", cachedAt: readLiveCache()[table]?.savedAt || null };
+      if (options.afterId) throw new Error("إكمال التقرير يحتاج اتصالاً بالخادم.");
+      return { data: rows.slice((page - 1) * pageSize, (page - 1) * pageSize + limit), total: rows.length, source: "cache", cachedAt: readLiveCache()[table]?.savedAt || null };
     }
-    let query = supabase.from(viewMap[table] || table).select("*", { count: "exact" });
+    const countOptions = options.count === true || options.count === "exact" || (table === "beneficiaries" && options.count === undefined) ? { count: "exact" } : {};
+    let query = supabase.from(viewMap[table] || table).select(options.columns || "*", countOptions);
     if (table === "beneficiaries") query = scopeBeneficiaryQuery(query);
     Object.entries(filters || {}).forEach(([key, value]) => {
       if (value !== "" && value !== undefined && value !== null) query = query.eq(key, value);
     });
     if (dateKey && dateFrom) query = query.gte(dateKey, dateFrom);
     if (dateKey && dateTo) query = query.lte(dateKey, dateKey.endsWith("_at") ? `${dateTo}T23:59:59.999` : dateTo);
-    if (search) query = query.or(`search_text.ilike.%${search.replaceAll(",", " ")}%`);
+    if (search) query = query.ilike("search_text", `%${String(search).replace(/[\\%_]/g, "\\$&")}%`);
     query = query.order(orderBy || "id", { ascending, nullsFirst: false });
     if (orderBy && orderBy !== "id") query = query.order("id", { ascending: true });
+    if (options.afterId) query = query.gt("id", options.afterId);
     const from = (page - 1) * pageSize;
-    query = query.range(from, from + pageSize - 1);
+    query = query.range(from, from + limit - 1);
     if (options.signal) query = query.abortSignal(options.signal);
     try {
       const { data, error, count } = await query;
+      if (options.signal?.aborted || readScope !== beneficiaryCacheScope(currentBeneficiaryScope())) throw new DOMException("Read superseded", "AbortError");
       if (error) throw error;
-      cacheRows(table, data || []);
-      return { data: data || [], total: count || 0, source: "network" };
+      if (options.cache !== false && (!options.columns || options.columns === "*")) cacheRows(table, data || []);
+      return { data: data || [], total: count ?? null, source: "network" };
     } catch (error) {
-      if (options.signal?.aborted || table === "beneficiaries") throw error;
+      if (options.signal?.aborted || error?.name === "AbortError" || table === "beneficiaries" || options.strict) throw error;
       const session = readStoredSession();
       const rows = scopeRowsForSession(table, cachedRows(table, session), session, cachedRows("delegates", session));
       if (rows.length || !isOnline()) {

@@ -11,20 +11,26 @@ export async function loadDashboardSections(sources, {
   if (signal?.aborted) throw aborted();
   publish();
   async function attempt(source) {
-    const controller = new AbortController(); let timer, rejectCancellation;
+    const controller = new AbortController(); let timer, rejectCancellation, progress, active = true;
     const cancellation = new Promise((_, reject) => { rejectCancellation = reject; });
-    const cancel = () => { controller.abort(); rejectCancellation(aborted()); };
+    const cancel = () => { active = false; controller.abort(); rejectCancellation(aborted()); };
     signal?.addEventListener("abort", cancel, { once: true });
     const deadline = new Promise((_, reject) => {
-      timer = setTimeout(() => {
-        reject(Object.assign(new Error("انتهت مهلة تحميل القسم"), { code: "DASHBOARD_TIMEOUT" }));
-        controller.abort();
-      }, timeoutMs);
+      progress = () => {
+        if (!active || controller.signal.aborted || signal?.aborted) return;
+        clearTimeout(timer);
+        timer = setTimeout(() => {
+          active = false;
+          reject(Object.assign(new Error("انتهت مهلة تحميل القسم"), { code: "DASHBOARD_TIMEOUT" }));
+          controller.abort();
+        }, timeoutMs);
+      };
+      progress();
     });
     try {
       if (signal?.aborted) throw aborted();
-      return await Promise.race([Promise.resolve().then(() => source.load({ signal: controller.signal })), deadline, cancellation]);
-    } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
+      return await Promise.race([Promise.resolve().then(() => source.load({ signal: controller.signal, progress })), deadline, cancellation]);
+    } finally { active = false; clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
   }
   async function worker() {
     while (next < queue.length && !signal?.aborted) {
